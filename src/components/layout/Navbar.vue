@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { Menu, X, Sparkles, ArrowRight } from 'lucide-vue-next'
+import { Menu, X, Sparkles, ArrowRight, LayoutDashboard, LogOut } from 'lucide-vue-next'
 import ThemeToggle from '@/components/ui/ThemeToggle.vue'
 import Button from '@/components/ui/Button.vue'
+import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 const isMobileMenuOpen = ref(false)
 
 const navLinks = [
@@ -34,6 +36,12 @@ const handleNavClick = (link: typeof navLinks[0]) => {
       router.push('/')
     }
   }
+}
+
+const handleLogout = async () => {
+  isMobileMenuOpen.value = false
+  await authStore.logout()
+  await router.push('/')
 }
 </script>
 
@@ -75,22 +83,44 @@ const handleNavClick = (link: typeof navLinks[0]) => {
 
         <div class="h-4 w-px bg-border-subtle mx-1" />
 
-        <Button
-          variant="ghost"
-          size="sm"
-          to="/login"
-        >
-          Log in
-        </Button>
+        <template v-if="authStore.isAuthenticated">
+          <Button
+            variant="ghost"
+            size="sm"
+            to="/dashboard"
+          >
+            <LayoutDashboard class="w-3.5 h-3.5 mr-1" />
+            <span>Dashboard</span>
+          </Button>
 
-        <Button
-          variant="primary"
-          size="sm"
-          to="/signup"
-        >
-          <span>Get Started</span>
-          <ArrowRight class="w-3.5 h-3.5" />
-        </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            @click="handleLogout"
+          >
+            <LogOut class="w-3.5 h-3.5 mr-1 text-text-muted" />
+            <span>Sign Out</span>
+          </Button>
+        </template>
+
+        <template v-else>
+          <Button
+            variant="ghost"
+            size="sm"
+            to="/login"
+          >
+            Log in
+          </Button>
+
+          <Button
+            variant="primary"
+            size="sm"
+            to="/signup"
+          >
+            <span>Get Started</span>
+            <ArrowRight class="w-3.5 h-3.5" />
+          </Button>
+        </template>
       </div>
 
       <!-- Mobile Menu Button & Theme Toggle -->
@@ -136,26 +166,47 @@ const handleNavClick = (link: typeof navLinks[0]) => {
         </div>
 
         <div class="pt-3 border-t border-border-subtle flex flex-col gap-2.5">
-          <Button
-            variant="outline"
-            full-width
-            to="/login"
-            @click="isMobileMenuOpen = false"
-          >
-            Log in
-          </Button>
-          <Button
-            variant="primary"
-            full-width
-            to="/signup"
-            @click="isMobileMenuOpen = false"
-          >
-            <span>Get Started Free</span>
-            <ArrowRight class="w-4 h-4 ml-1" />
-          </Button>
+          <template v-if="authStore.isAuthenticated">
+            <Button
+              variant="outline"
+              full-width
+              to="/dashboard"
+              @click="isMobileMenuOpen = false"
+            >
+              <LayoutDashboard class="w-4 h-4 mr-1.5" />
+              <span>Dashboard ({{ authStore.user?.name || 'Account' }})</span>
+            </Button>
+            <Button
+              variant="ghost"
+              full-width
+              @click="handleLogout"
+            >
+              <LogOut class="w-4 h-4 mr-1.5 text-danger" />
+              <span class="text-danger">Sign Out</span>
+            </Button>
+          </template>
+
+          <template v-else>
+            <Button
+              variant="outline"
+              full-width
+              to="/login"
+              @click="isMobileMenuOpen = false"
+            >
+              Log in
+            </Button>
+            <Button
+              variant="primary"
+              full-width
+              to="/signup"
+              @click="isMobileMenuOpen = false"
+            >
+              <span>Get Started Free</span>
+              <ArrowRight class="w-4 h-4 ml-1" />
+            </Button>
+          </template>
         </div>
       </div>
     </Transition>
   </header>
 </template>
-

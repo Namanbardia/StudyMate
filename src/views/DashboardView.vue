@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   Compass,
   Calendar,
@@ -10,12 +11,16 @@ import {
   ArrowRight,
   Info,
   CheckCircle2,
-  Sparkles
+  Sparkles,
+  LogOut
 } from 'lucide-vue-next'
 import Card from '@/components/ui/Card.vue'
 import Button from '@/components/ui/Button.vue'
 import Badge from '@/components/ui/Badge.vue'
+import { useAuthStore } from '@/stores/auth'
 
+const router = useRouter()
+const authStore = useAuthStore()
 const showNotice = ref(true)
 const currentDate = new Date().toLocaleDateString('en-US', {
   weekday: 'long',
@@ -23,6 +28,11 @@ const currentDate = new Date().toLocaleDateString('en-US', {
   day: 'numeric',
   year: 'numeric'
 })
+
+const handleLogout = async () => {
+  await authStore.logout()
+  await router.push('/')
+}
 </script>
 
 <template>
@@ -57,10 +67,10 @@ const currentDate = new Date().toLocaleDateString('en-US', {
           <span class="text-xs text-text-muted font-mono">{{ currentDate }}</span>
         </div>
         <h1 class="text-2xl sm:text-3xl font-serif font-bold text-text-base mt-1.5">
-          Welcome, Student
+          Welcome, {{ authStore.user?.name || 'Student' }}
         </h1>
         <p class="text-sm text-text-muted mt-0.5">
-          Track your daily study milestones and review saved resource packages.
+          {{ authStore.user?.email ? authStore.user.email + ' &bull; ' : '' }}Track your daily study milestones and review saved resource packages.
         </p>
       </div>
 
@@ -68,6 +78,11 @@ const currentDate = new Date().toLocaleDateString('en-US', {
         <Button variant="outline" size="sm" to="/">
           <Compass class="w-4 h-4 mr-1.5" />
           <span>Search Topics</span>
+        </Button>
+
+        <Button variant="ghost" size="sm" @click="handleLogout">
+          <LogOut class="w-4 h-4 mr-1.5 text-danger" />
+          <span class="text-danger">Log Out</span>
         </Button>
       </div>
     </div>
