@@ -12,6 +12,18 @@ export default defineConfig({
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url))
     }
+  },
+  server: {
+    proxy: {
+      '/api': {
+        target: 'https://studymate-api.studymateapp.workers.dev',
+        changeOrigin: true,
+        secure: true,
+        headers: {
+          Origin: 'https://studymate.studymateapp.workers.dev'
+        }
+      }
+    }
   }
 })
 

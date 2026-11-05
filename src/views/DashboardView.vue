@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   Compass,
@@ -9,10 +9,11 @@ import {
   Search,
   BookOpen,
   ArrowRight,
-  Info,
   CheckCircle2,
   Sparkles,
-  LogOut
+  LogOut,
+  RefreshCw,
+  Server
 } from 'lucide-vue-next'
 import Card from '@/components/ui/Card.vue'
 import Button from '@/components/ui/Button.vue'
@@ -22,11 +23,27 @@ import { useAuthStore } from '@/stores/auth'
 const router = useRouter()
 const authStore = useAuthStore()
 const showNotice = ref(true)
+const isSyncingWorker = ref(false)
 const currentDate = new Date().toLocaleDateString('en-US', {
   weekday: 'long',
   month: 'short',
   day: 'numeric',
   year: 'numeric'
+})
+
+const handleRefreshMe = async () => {
+  isSyncingWorker.value = true
+  try {
+    await authStore.syncWithWorker()
+  } finally {
+    isSyncingWorker.value = false
+  }
+}
+
+onMounted(() => {
+  if (authStore.isAuthenticated && !authStore.workerProfile) {
+    handleRefreshMe()
+  }
 })
 
 const handleLogout = async () => {
@@ -37,24 +54,61 @@ const handleLogout = async () => {
 
 <template>
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 space-y-8">
-    <!-- Section 5 Staging Notice -->
+    <!-- Cloudflare Worker /api/me Integration Status Banner -->
     <div v-if="showNotice" class="p-4 rounded-xl bg-accent/10 border border-accent/25 text-xs text-text-base flex items-start justify-between gap-3">
-      <div class="flex items-start gap-3">
-        <Info class="w-4 h-4 text-accent shrink-0 mt-0.5" />
-        <div>
-          <p class="font-semibold text-text-base">Section 5 Student Dashboard Preview</p>
-          <p class="text-text-muted mt-0.5">
-            This dashboard demonstrates the responsive layout and empty states. Real authenticated user data and Cloudflare Worker endpoints will be connected in Section 5.
+      <div class="flex items-start gap-3 flex-1">
+        <Server class="w-4 h-4 text-accent shrink-0 mt-0.5" />
+        <div class="space-y-1">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="font-semibold text-text-base">Cloudflare Worker API Integration:</span>
+            <Badge v-if="authStore.workerProfile" variant="success" size="sm">
+              <CheckCircle2 class="w-3 h-3 mr-1" />
+              Verified /api/me
+            </Badge>
+            <Badge v-else-if="authStore.workerSyncError" variant="danger" size="sm">
+              Sync Notice
+            </Badge>
+            <Badge v-else variant="muted" size="sm">
+              Connecting...
+            </Badge>
+          </div>
+
+          <p v-if="authStore.workerProfile" class="text-text-muted">
+            Verified Firebase UID:
+            <code class="px-1.5 py-0.5 rounded bg-surface border border-border-subtle font-mono text-[11px] text-text-base">
+              {{ authStore.workerProfile.id || authStore.workerProfile.uid || authStore.user?.id }}
+            </code>
+          </p>
+          <p v-else-if="authStore.workerSyncError" class="text-text-muted">
+            {{ authStore.workerSyncError }}
+          </p>
+          <p v-else class="text-text-muted">
+            Validating Firebase bearer token with backend endpoint (<code class="font-mono text-[11px]">GET /api/me</code>)...
           </p>
         </div>
       </div>
-      <button
-        type="button"
-        @click="showNotice = false"
-        class="text-text-muted hover:text-text-base text-xs font-semibold cursor-pointer"
-      >
-        &times;
-      </button>
+
+      <div class="flex items-center gap-2 shrink-0">
+        <button
+          type="button"
+          @click="handleRefreshMe"
+          :disabled="isSyncingWorker"
+          class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-border-subtle bg-surface text-text-muted hover:text-text-base text-xs transition-colors cursor-pointer disabled:opacity-50"
+          title="Test GET /api/me request with Firebase bearer token"
+        >
+          <RefreshCw class="w-3 h-3" :class="isSyncingWorker ? 'animate-spin' : ''" />
+          <span class="hidden sm:inline">Test /api/me</span>
+        </button>
+
+        <button
+          type="button"
+          @click="showNotice = false"
+          class="text-text-muted hover:text-text-base text-xs font-semibold cursor-pointer p-1"
+          aria-label="Dismiss banner"
+        >
+          &times;
+        </button>
+      </div>
     </div>
 
     <!-- Dashboard Header -->

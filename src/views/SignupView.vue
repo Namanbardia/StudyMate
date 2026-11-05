@@ -109,6 +109,8 @@ const handleSignup = async () => {
     }
 
     await authStore.setUserFromFirebase(userCredential.user)
+    // Verify token with Cloudflare Worker (/api/me)
+    await authStore.syncWithWorker().catch((e) => console.warn('Worker sync on signup:', e))
     await navigateAfterSignup()
   } catch (err: any) {
     errorMessage.value = getFriendlyErrorMessage(err)
@@ -125,6 +127,8 @@ const handleGoogleSignup = async () => {
   try {
     const userCredential = await signInWithPopup(auth, googleProvider)
     await authStore.setUserFromFirebase(userCredential.user)
+    // Verify token with Cloudflare Worker (/api/me)
+    await authStore.syncWithWorker().catch((e) => console.warn('Worker sync on Google signup:', e))
     await navigateAfterSignup()
   } catch (err: any) {
     errorMessage.value = getFriendlyErrorMessage(err)
