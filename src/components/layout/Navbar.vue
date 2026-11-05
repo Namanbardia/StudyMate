@@ -4,8 +4,6 @@ import {
   Menu,
   Sparkles,
   ArrowRight,
-  LayoutDashboard,
-  LogOut,
   Search
 } from 'lucide-vue-next'
 import ThemeToggle from '@/components/ui/ThemeToggle.vue'
@@ -45,11 +43,6 @@ const handleNavClick = (link: typeof publicNavLinks[0]) => {
   }
 }
 
-const handleLogout = async () => {
-  uiStore.closeMobileSidebar()
-  await authStore.logout()
-  await router.push('/')
-}
 </script>
 
 <template>
@@ -111,31 +104,12 @@ const handleLogout = async () => {
             variant="outline"
             size="sm"
             to="/search"
-            class="hidden sm:inline-flex"
+            class="inline-flex"
           >
             <Search class="w-3.5 h-3.5 mr-1.5 text-accent" />
             <span>New Search</span>
           </Button>
 
-          <!-- Dashboard Link -->
-          <Button
-            variant="ghost"
-            size="sm"
-            to="/dashboard"
-          >
-            <LayoutDashboard class="w-3.5 h-3.5 mr-1" />
-            <span class="hidden sm:inline">Dashboard</span>
-          </Button>
-
-          <!-- Sign Out Button -->
-          <Button
-            variant="outline"
-            size="sm"
-            @click="handleLogout"
-          >
-            <LogOut class="w-3.5 h-3.5 mr-1 text-text-muted" />
-            <span class="hidden sm:inline">Sign Out</span>
-          </Button>
         </template>
 
         <!-- Unauthenticated Public CTA Controls -->
