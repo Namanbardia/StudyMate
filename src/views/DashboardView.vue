@@ -129,8 +129,8 @@ const handleLogout = async () => {
       </div>
 
       <div class="flex items-center gap-3">
-        <Button variant="outline" size="sm" to="/">
-          <Compass class="w-4 h-4 mr-1.5" />
+        <Button variant="outline" size="sm" to="/search">
+          <Compass class="w-4 h-4 mr-1.5 text-accent" />
           <span>Search Topics</span>
         </Button>
 
@@ -200,7 +200,7 @@ const handleLogout = async () => {
             Begin by searching for a topic you are currently studying. StudyMate will break down the concepts and generate a realistic day-by-day plan.
           </p>
 
-          <Button variant="primary" size="md" to="/">
+          <Button variant="primary" size="md" to="/search">
             <span>Start Learning Search</span>
             <ArrowRight class="w-4 h-4 ml-1" />
           </Button>

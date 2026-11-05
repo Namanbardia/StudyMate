@@ -31,3 +31,5 @@ pnpm-debug.log*
 # Environment files
 .env
 .env*.local
+
+StudyMate_AI_Updated_Master_Spec.md

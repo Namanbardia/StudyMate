@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import HomeView from '@/views/HomeView.vue'
+import { auth } from '@/firebase/config'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -41,7 +42,25 @@ const router = createRouter({
       path: '/dashboard',
       name: 'dashboard',
       component: () => import('@/views/DashboardView.vue'),
-      meta: { title: 'Student Dashboard — StudyMate AI' }
+      meta: { title: 'Student Dashboard — StudyMate AI', requiresAuth: true }
+    },
+    {
+      path: '/search',
+      name: 'search',
+      component: () => import('@/views/SearchView.vue'),
+      meta: { title: 'AI Search — StudyMate AI', requiresAuth: true }
+    },
+    {
+      path: '/profile',
+      name: 'profile',
+      component: () => import('@/views/DashboardView.vue'),
+      meta: { title: 'Student Profile — StudyMate AI', requiresAuth: true }
+    },
+    {
+      path: '/settings',
+      name: 'settings',
+      component: () => import('@/views/DashboardView.vue'),
+      meta: { title: 'Settings — StudyMate AI', requiresAuth: true }
     },
     {
       path: '/terms',
@@ -99,10 +118,21 @@ const router = createRouter({
   }
 })
 
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to, _from, next) => {
   if (to.meta.title) {
     document.title = to.meta.title as string
   }
+
+  if (to.meta.requiresAuth) {
+    // Wait for auth to initialize if needed
+    if (auth.currentUser === null) {
+      await auth.authStateReady()
+    }
+    if (!auth.currentUser) {
+      return next({ path: '/login', query: { redirect: to.fullPath } })
+    }
+  }
+
   next()
 })
 
