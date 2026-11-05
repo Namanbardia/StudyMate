@@ -16,12 +16,9 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://studymate-api.studymateapp.workers.dev',
+        target: 'http://127.0.0.1:8787',
         changeOrigin: true,
-        secure: true,
-        headers: {
-          Origin: 'https://studymate.studymateapp.workers.dev'
-        }
+        secure: false
       }
     }
   }

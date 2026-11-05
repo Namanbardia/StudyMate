@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "backend-remote-dev",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-04",
+  "vars": {
+    "FIREBASE_PROJECT_ID": "studymate-ai-ede5a",
+    "FIREBASE_CERT_TIMEOUT_MS": "10000",
+    "APP_ORIGIN": "http://127.0.0.1:5173",
+    "ENABLE_DEV_DIAGNOSTICS": "true"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "upload_source_maps": true
+}

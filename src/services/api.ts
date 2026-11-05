@@ -20,6 +20,7 @@ export class ApiError extends Error {
  */
 export interface RequestOptions extends RequestInit {
   requiresAuth?: boolean
+  retryUnauthorized?: boolean
   params?: Record<string, string | number | boolean | undefined | null>
 }
 
@@ -49,6 +50,38 @@ export interface WorkerMeResponse {
   [key: string]: any
 }
 
+export type SearchType = 'all' | 'videos' | 'web'
+
+export interface YouTubeSearchResult {
+  id: string
+  title: string
+  url: string
+  thumbnail: string
+  channel: string
+  publishedAt: string
+  description: string
+}
+
+export interface WebSearchResult {
+  title: string
+  url: string
+  content: string
+  score: number | null
+}
+
+export interface StudySearchResponse {
+  success: boolean
+  query: string
+  type: SearchType
+  videos: YouTubeSearchResult[]
+  web: WebSearchResult[]
+  providers: {
+    youtube: { ok: boolean; error?: string }
+    tavily: { ok: boolean; error?: string }
+  }
+  message?: string
+}
+
 /**
  * Base URL for the Cloudflare API Worker.
  * Defaults to import.meta.env.VITE_API_BASE_URL if configured.
@@ -56,6 +89,11 @@ export interface WorkerMeResponse {
  * so that Cloudflare Worker CORS restrictions on localhost origins are cleanly avoided.
  */
 function getApiBaseUrl(): string {
+  const configuredUrl = import.meta.env.VITE_API_BASE_URL || ''
+  if (configuredUrl) {
+    return configuredUrl.replace(/\/+$/, '')
+  }
+
   if (
     import.meta.env.DEV &&
     typeof window !== 'undefined' &&
@@ -63,8 +101,7 @@ function getApiBaseUrl(): string {
   ) {
     return ''
   }
-  const url = import.meta.env.VITE_API_BASE_URL || ''
-  return url.replace(/\/+$/, '')
+  return ''
 }
 
 /**
@@ -102,6 +139,7 @@ export async function apiRequest<T = any>(
 ): Promise<T> {
   const {
     requiresAuth = true,
+    retryUnauthorized = true,
     params,
     headers: customHeaders = {},
     ...restOptions
@@ -192,7 +230,7 @@ export async function apiRequest<T = any>(
     }
 
     // If 401 Unauthorized occurs and we haven't retried yet, force a token refresh and retry once
-    if (response.status === 401 && requiresAuth && !authRetry) {
+    if (response.status === 401 && requiresAuth && retryUnauthorized && !authRetry) {
       const refreshedToken = await getFirebaseIdToken(true)
       if (refreshedToken) {
         headers.set('Authorization', `Bearer ${refreshedToken}`)
@@ -243,6 +281,27 @@ export async function getMe(): Promise<WorkerMeResponse> {
     requiresAuth: true
   })
 }
+
+export async function searchStudyResources(query: string, type: SearchType): Promise<StudySearchResponse> {
+  const normalizedQuery = query.normalize('NFKC').trim().replace(/\s+/gu, ' ')
+  const dedupeKey = `${normalizedQuery.toLocaleLowerCase('en-US')}::${type}`
+  const existingRequest = inFlightSearchRequests.get(dedupeKey)
+  if (existingRequest) return existingRequest
+
+  let request: Promise<StudySearchResponse>
+  request = apiRequest<StudySearchResponse>('/api/search', {
+    method: 'POST',
+    requiresAuth: true,
+    retryUnauthorized: false,
+    body: JSON.stringify({ query: normalizedQuery, type }),
+  }).finally(() => {
+    if (inFlightSearchRequests.get(dedupeKey) === request) inFlightSearchRequests.delete(dedupeKey)
+  })
+  inFlightSearchRequests.set(dedupeKey, request)
+  return request
+}
+
+const inFlightSearchRequests = new Map<string, Promise<StudySearchResponse>>()
 
 // Alias for convenience
 export const fetchCurrentUser = getMe

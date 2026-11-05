@@ -7,6 +7,18 @@
 	"name": "backend",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-11-04",
+	"vars": {
+		"FIREBASE_PROJECT_ID": "studymate-ai-ede5a",
+		"FIREBASE_CERT_TIMEOUT_MS": "10000",
+		"APP_ORIGIN": "https://studymate.studymateapp.workers.dev"
+	},
+	"d1_databases": [
+		{
+			"binding": "SEARCH_CACHE_DB",
+			"database_name": "studymate-db",
+			"database_id": "4d6ef822-7203-47b0-8674-cc4392aefe5e"
+		}
+	],
 	"observability": {
 		"enabled": true
 	},
