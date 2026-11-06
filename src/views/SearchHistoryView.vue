@@ -12,6 +12,7 @@ import {
 import Card from '@/components/ui/Card.vue'
 import Button from '@/components/ui/Button.vue'
 import Badge from '@/components/ui/Badge.vue'
+import Modal from '@/components/ui/Modal.vue'
 import { useAuthStore } from '@/stores/auth'
 import { getSearchHistory, type SearchHistoryEntry, getSearchHistoryEntry, deleteSearchHistoryEntry } from '@/services/api'
 
@@ -24,6 +25,11 @@ const isLoadingMore = ref(false)
 const error = ref<string | null>(null)
 const cursor = ref<string | undefined>(undefined)
 const hasMore = ref(true)
+
+// Delete confirmation modal state
+const deleteModalOpen = ref(false)
+const deleteTargetId = ref<string | null>(null)
+const isDeleting = ref(false)
 
 const loadSearchHistory = async (append = false) => {
   if (!authStore.isAuthenticated) return
@@ -112,18 +118,31 @@ const clearAllHistory = async () => {
   hasMore.value = false
 }
 
-const deleteHistoryEntry = async (id: string, event: Event) => {
+const openDeleteModal = (id: string, event: Event) => {
   event.stopPropagation()
-  if (!confirm('Delete this search from history?')) {
-    return
-  }
+  deleteTargetId.value = id
+  deleteModalOpen.value = true
+}
+
+const confirmDelete = async () => {
+  if (!deleteTargetId.value || isDeleting.value) return
+  isDeleting.value = true
   try {
-    await deleteSearchHistoryEntry(id)
-    searchHistory.value = searchHistory.value.filter(entry => entry.id !== id)
+    await deleteSearchHistoryEntry(deleteTargetId.value)
+    searchHistory.value = searchHistory.value.filter(entry => entry.id !== deleteTargetId.value)
   } catch (err) {
     console.warn('[SearchHistory] Failed to delete entry:', err)
-    alert('Failed to delete search history entry')
+  } finally {
+    isDeleting.value = false
+    deleteModalOpen.value = false
+    deleteTargetId.value = null
   }
+}
+
+const cancelDelete = () => {
+  if (isDeleting.value) return
+  deleteModalOpen.value = false
+  deleteTargetId.value = null
 }
 </script>
 
@@ -174,11 +193,11 @@ const deleteHistoryEntry = async (id: string, event: Event) => {
       </div>
 
       <ul v-else class="space-y-3" role="list" aria-label="Search history">
-        <li v-for="entry in searchHistory" :key="entry.id" class="group">
+        <li v-for="entry in searchHistory" :key="entry.id" class="relative group">
           <button
             type="button"
             @click="handleSearchClick(entry)"
-            class="w-full flex items-start gap-4 p-4 rounded-xl border border-border-subtle hover:bg-surface-muted hover:border-accent/30 transition-all duration-200 text-left"
+            class="w-full flex items-start gap-4 p-4 pr-14 rounded-xl border border-border-subtle hover:bg-surface-muted hover:border-accent/30 transition-all duration-200 text-left"
           >
             <div class="flex items-center justify-center w-11 h-11 rounded-lg bg-accent/10 text-accent shrink-0">
               <Search class="w-5 h-5" />
@@ -199,9 +218,10 @@ const deleteHistoryEntry = async (id: string, event: Event) => {
           </button>
           <button
             type="button"
-            @click="deleteHistoryEntry(entry.id, $event)"
-            class="absolute right-4 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-text-muted hover:text-danger hover:bg-danger/10 transition-colors opacity-0 group-hover:opacity-100"
+            @click="openDeleteModal(entry.id, $event)"
+            class="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-text-muted hover:text-danger hover:bg-danger/10 transition-colors opacity-0 group-hover:opacity-100"
             aria-label="Delete search history entry"
+            :disabled="isDeleting"
           >
             <Trash2 class="w-4 h-4" />
           </button>
@@ -223,4 +243,17 @@ const deleteHistoryEntry = async (id: string, event: Event) => {
       </div>
     </Card>
   </div>
+
+  <!-- Delete Confirmation Modal -->
+  <Modal :open="deleteModalOpen" @close="cancelDelete" title="Delete Search?" maxWidth="sm" :description="undefined">
+    <p class="text-text-base text-sm">Are you sure you want to delete this search from your history?</p>
+    <template #footer>
+      <Button variant="outline" size="sm" @click="cancelDelete" :disabled="isDeleting" class="cursor-pointer">
+        Cancel
+      </Button>
+      <Button variant="secondary" size="sm" @click="confirmDelete" :loading="isDeleting" :disabled="isDeleting" class="bg-danger/10 text-danger hover:text-danger hover:bg-danger/10 cursor-pointer">
+        Delete
+      </Button>
+    </template>
+  </Modal>
 </template>
