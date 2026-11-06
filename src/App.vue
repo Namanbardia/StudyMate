@@ -34,7 +34,7 @@ const isAuthenticatedView = computed(() => {
       class="flex-1 w-full transition-all duration-300 ease-in-out"
       :class="[
         isAuthenticatedView
-          ? (uiStore.sidebarCollapsed ? 'md:pl-[68px]' : 'md:pl-[260px]')
+          ? (uiStore.sidebarCollapsed ? 'md:pl-[80px]' : 'md:pl-[280px]')
           : ''
       ]"
     >

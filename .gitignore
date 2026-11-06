@@ -35,3 +35,5 @@ pnpm-debug.log*
 backend/.dev.vars
 backend/.dev.vars.*
 StudyMate_AI_Updated_Master_Spec.md
+
+.continue/.env

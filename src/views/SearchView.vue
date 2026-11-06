@@ -1,12 +1,31 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Search, Sparkles, BookOpen, Compass, Youtube, Globe2, Layers3, AlertCircle } from 'lucide-vue-next'
+import {
+  Search,
+  Sparkles,
+  BookOpen,
+  Compass,
+  Youtube,
+  Globe2,
+  Layers3,
+  AlertCircle,
+  Brain,
+  Network,
+  Code,
+  Database,
+  Monitor,
+  Bot
+} from 'lucide-vue-next'
 import Card from '@/components/ui/Card.vue'
 import Button from '@/components/ui/Button.vue'
 import Badge from '@/components/ui/Badge.vue'
 import YouTubeResultCard from '@/components/search/YouTubeResultCard.vue'
 import WebResultCard from '@/components/search/WebResultCard.vue'
 import { ApiError, searchStudyResources, type SearchType, type StudySearchResponse } from '@/services/api'
+
+// Import suggested topics from JSON
+// Topics can be managed directly through this JSON file without code changes
+import suggestedTopics from '@/data/suggestedTopics.json'
 
 const searchQuery = ref('')
 const searchInput = ref<HTMLInputElement | null>(null)
@@ -25,6 +44,16 @@ const tabs: Array<{ id: SearchType; label: string; icon: typeof Layers3 }> = [
 const videos = computed(() => results.value?.videos || [])
 const webResults = computed(() => results.value?.web || [])
 const visibleResultCount = computed(() => selectedType.value === 'videos' ? videos.value.length : selectedType.value === 'web' ? webResults.value.length : videos.value.length + webResults.value.length)
+
+// Map icon names from JSON to Lucide components
+const iconMap = {
+  brain: Brain,
+  network: Network,
+  code: Code,
+  database: Database,
+  monitor: Monitor,
+  bot: Bot
+} as const
 
 const handleSearch = async () => {
   const query = searchQuery.value.trim()
@@ -52,6 +81,7 @@ const selectTab = (type: SearchType) => {
 const selectTopic = (topic: string) => {
   searchQuery.value = topic
   searchInput.value?.focus()
+  handleSearch()
 }
 </script>
 
@@ -77,7 +107,20 @@ const selectTopic = (topic: string) => {
       <div v-if="!hasSearched" class="pt-1">
         <span class="text-xs font-semibold text-text-muted uppercase tracking-wider block mb-2">Suggested topics</span>
         <div class="flex flex-wrap gap-2">
-          <button v-for="topic in ['Dynamic Programming in Python', 'Organic Chemistry Reaction Mechanisms', 'Macroeconomics: Monetary Policy', 'Linear Algebra: Eigenvectors', 'Cell Biology: Mitosis']" :key="topic" type="button" @click="selectTopic(topic)" class="text-xs px-2.5 py-1.5 rounded-lg bg-surface-muted hover:bg-surface-hover text-text-base border border-border-subtle transition-colors cursor-pointer">{{ topic }}</button>
+          <button
+            v-for="topic in suggestedTopics"
+            :key="topic.id"
+            type="button"
+            @click="selectTopic(topic.title)"
+            class="group flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-muted hover:bg-surface-hover text-text-base border border-border-subtle transition-colors cursor-pointer"
+          >
+            <component
+              :is="iconMap[topic.icon as keyof typeof iconMap]"
+              class="w-4 h-4 text-accent group-hover:scale-110 transition-transform"
+            />
+            <span class="text-xs font-medium">{{ topic.title }}</span>
+            <span class="text-[10px] text-text-muted px-1.5 py-0.5 rounded bg-surface border border-border-subtle">{{ topic.category }}</span>
+          </button>
         </div>
       </div>
     </Card>

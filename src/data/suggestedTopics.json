@@ -1,0 +1,38 @@
+[
+  {
+    "id": "machine-learning",
+    "title": "Machine Learning",
+    "category": "Artificial Intelligence",
+    "icon": "brain"
+  },
+  {
+    "id": "data-structures",
+    "title": "Data Structures",
+    "category": "Computer Science",
+    "icon": "network"
+  },
+  {
+    "id": "web-development",
+    "title": "Web Development",
+    "category": "Development",
+    "icon": "code"
+  },
+  {
+    "id": "database-management",
+    "title": "Database Management",
+    "category": "Computer Science",
+    "icon": "database"
+  },
+  {
+    "id": "operating-systems",
+    "title": "Operating Systems",
+    "category": "Computer Science",
+    "icon": "monitor"
+  },
+  {
+    "id": "artificial-intelligence",
+    "title": "Artificial Intelligence",
+    "category": "Artificial Intelligence",
+    "icon": "bot"
+  }
+]
