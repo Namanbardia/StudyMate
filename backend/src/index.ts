@@ -1142,7 +1142,7 @@ async function handleStudyPlanDetail(request: Request, env: Env): Promise<Respon
       }
 
       const tasks = await db.prepare(
-        'SELECT id, plan_id, user_id, day_number, task_title, task_description, estimated_duration_minutes, module_name, module_order, is_completed, completed_at, created_at, updated_at FROM ai_study_plans_tasks WHERE plan_id = ?1 AND user_id = ?2 ORDER BY day_number, module_order'
+        'SELECT id, plan_id, user_id, day_number, task_title, task_description, estimated_duration_minutes, module_name, module_order, is_completed, completed_at, created_at, updated_at FROM ai_study_plan_tasks WHERE plan_id = ?1 AND user_id = ?2 ORDER BY day_number, module_order'
       ).bind(id, user.uid).all<StudyPlanTask>()
 
       return json({ success: true, plan, tasks: tasks.results || [] })
@@ -1202,7 +1202,7 @@ async function handleStudyPlanTaskUpdate(request: Request, env: Env): Promise<Re
 
     // Verify task exists and belongs to plan
     const task = await db.prepare(
-      'SELECT id, is_completed FROM ai_study_plans_tasks WHERE id = ?1 AND plan_id = ?2 AND user_id = ?3'
+      'SELECT id, is_completed FROM ai_study_plan_tasks WHERE id = ?1 AND plan_id = ?2 AND user_id = ?3'
     ).bind(taskId, planId, user.uid).first<{ id: string; is_completed: number }>()
 
     if (!task) {
@@ -1213,12 +1213,12 @@ async function handleStudyPlanTaskUpdate(request: Request, env: Env): Promise<Re
     const completedAt = body.isCompleted ? now : null
 
     await db.prepare(
-      'UPDATE ai_study_plans_tasks SET is_completed = ?1, completed_at = ?2, updated_at = ?3 WHERE id = ?4'
+      'UPDATE ai_study_plan_tasks SET is_completed = ?1, completed_at = ?2, updated_at = ?3 WHERE id = ?4'
     ).bind(body.isCompleted ? 1 : 0, completedAt, now, taskId).run()
 
     // Recalculate plan progress
     const taskStats = await db.prepare(
-      'SELECT COUNT(*) as total, SUM(is_completed) as completed FROM ai_study_plans_tasks WHERE plan_id = ?1'
+      'SELECT COUNT(*) as total, SUM(is_completed) as completed FROM ai_study_plan_tasks WHERE plan_id = ?1'
     ).bind(planId).first<{ total: number; completed: number }>()
 
     if (taskStats && taskStats.total > 0) {
