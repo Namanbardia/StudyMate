@@ -5,7 +5,9 @@
 
 export interface Env {
   GEMINI_API_KEY?: string
-  GEMINI_MODEL?: string
+  GEMINI_PRIMARY_MODEL?: string
+  GEMINI_FALLBACK_MODEL_1?: string
+  GEMINI_FALLBACK_MODEL_2?: string
 }
 
 export interface StudyPlanInput {
@@ -60,8 +62,22 @@ function getGeminiApiKey(env: Env): string {
   return key
 }
 
-function getGeminiModel(env: Env): string {
-  return env.GEMINI_MODEL || 'gemini-2.5-flash'
+function getGeminiModels(env: Env): string[] {
+  const models: string[] = []
+  if (env.GEMINI_PRIMARY_MODEL) {
+    models.push(env.GEMINI_PRIMARY_MODEL)
+  }
+  if (env.GEMINI_FALLBACK_MODEL_1) {
+    models.push(env.GEMINI_FALLBACK_MODEL_1)
+  }
+  if (env.GEMINI_FALLBACK_MODEL_2) {
+    models.push(env.GEMINI_FALLBACK_MODEL_2)
+  }
+  // Default fallback if none configured
+  if (models.length === 0) {
+    models.push('gemini-2.5-flash')
+  }
+  return models
 }
 
 function buildStudyPlanPrompt(input: StudyPlanInput): string {
@@ -128,61 +144,140 @@ IMPORTANT CONSTRAINTS:
 
 async function callGeminiApi(env: Env, prompt: string): Promise<string> {
   const apiKey = getGeminiApiKey(env)
-  const model = getGeminiModel(env)
-  const url = `${GEMINI_API_BASE}/${model}:generateContent?key=${apiKey}`
+  const models = getGeminiModels(env)
+  const maxRetries = 3
+  const baseDelayMs = 2000
+  const retryableStatuses = new Set([429, 500, 502, 503, 504, 524])
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: prompt }],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.7,
-        topK: 40,
-        topP: 0.95,
-        maxOutputTokens: 8192,
-        responseMimeType: 'application/json',
-      },
-    }),
-  })
+  let lastError: Error | null = null
 
-  if (!response.ok) {
-    const errorText = await response.text()
-    console.error('[gemini] API error', JSON.stringify({
-      status: response.status,
-      statusText: response.statusText,
-      error: errorText,
-    }))
-    if (response.status === 429) {
-      throw new Error('Gemini API rate limit exceeded. Please try again later.')
+  for (let modelIndex = 0; modelIndex < models.length; modelIndex++) {
+    const model = models[modelIndex]
+    const url = `${GEMINI_API_BASE}/${model}:generateContent?key=${apiKey}`
+    let lastErrorForModel: Error | null = null
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        console.info('[gemini] Attempting model', JSON.stringify({ model, attempt: attempt + 1, maxRetries: maxRetries + 1, modelIndex: modelIndex + 1, totalModels: models.length }))
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                role: 'user',
+                parts: [{ text: prompt }],
+              },
+            ],
+            generationConfig: {
+              temperature: 0.7,
+              topK: 40,
+              topP: 0.95,
+              maxOutputTokens: 8192,
+              responseMimeType: 'application/json',
+            },
+          }),
+        })
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          console.warn('[gemini] API error', JSON.stringify({
+            model,
+            attempt: attempt + 1,
+            maxRetries: maxRetries + 1,
+            status: response.status,
+            statusText: response.statusText,
+            error: errorText,
+          }))
+
+          // Check if error is retryable
+          if (retryableStatuses.has(response.status) && attempt < maxRetries) {
+            const delayMs = baseDelayMs * Math.pow(2, attempt)
+            console.info('[gemini] Retrying after delay', JSON.stringify({ model, attempt: attempt + 1, delayMs }))
+            await new Promise(resolve => setTimeout(resolve, delayMs))
+            continue
+          }
+
+          // Non-retryable or max retries reached for this model
+          if (response.status === 429) {
+            throw new Error('Gemini API rate limit exceeded. Please try again later.')
+          }
+
+          // For other non-retryable errors (4xx except 429), don't retry this model, try next model
+          if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+            console.warn('[gemini] Non-retryable error for model, falling back', JSON.stringify({ model, status: response.status }))
+            lastErrorForModel = new Error(`Gemini API error: ${response.status} ${response.statusText}`)
+            break // Break out of retry loop, will try next model
+          }
+
+          throw new Error(`Gemini API error: ${response.status} ${response.statusText}`)
+        }
+
+        const data: any = await response.json()
+
+        if (!data.candidates || data.candidates.length === 0) {
+          throw new Error('Gemini API returned no candidates')
+        }
+
+        const candidate = data.candidates[0]
+        if (!candidate.content || !candidate.content.parts || candidate.content.parts.length === 0) {
+          throw new Error('Gemini API returned empty content')
+        }
+
+        const text = candidate.content.parts[0].text
+        if (!text) {
+          throw new Error('Gemini API returned empty text')
+        }
+
+        console.info('[gemini] Successfully generated response', JSON.stringify({ model }))
+        return text
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error))
+        lastErrorForModel = lastError
+
+        // If we've exhausted retries for this model, try next model
+        if (attempt === maxRetries) {
+          console.warn('[gemini] All retry attempts failed for model, trying next', JSON.stringify({ model, maxRetries: maxRetries + 1, error: lastError?.message }))
+          break // Break out of retry loop, will try next model
+        }
+
+        // Check if it's a network error (retryable)
+        const isNetworkError = error instanceof TypeError && error.message.includes('fetch')
+        if (!isNetworkError) {
+          // Non-network error (e.g., validation error), don't retry this model, try next
+          console.warn('[gemini] Non-network error for model, falling back', JSON.stringify({ model, error: lastError?.message }))
+          break // Break out of retry loop, will try next model
+        }
+
+        // Network error, retry with backoff
+        if (attempt < maxRetries) {
+          const delayMs = baseDelayMs * Math.pow(2, attempt)
+          console.info('[gemini] Network error, retrying after delay', JSON.stringify({ model, attempt: attempt + 1, delayMs, error: lastError?.message }))
+          await new Promise(resolve => setTimeout(resolve, delayMs))
+          continue
+        }
+      }
     }
-    throw new Error(`Gemini API error: ${response.status} ${response.statusText}`)
+
+    // This model failed, log fallback and try next model
+    if (modelIndex < models.length - 1) {
+      console.info('[gemini] Falling back to next model', JSON.stringify({ 
+        failedModel: model, 
+        nextModel: models[modelIndex + 1],
+        error: lastErrorForModel?.message 
+      }))
+    }
   }
 
-  const data: any = await response.json()
-
-  if (!data.candidates || data.candidates.length === 0) {
-    throw new Error('Gemini API returned no candidates')
-  }
-
-  const candidate = data.candidates[0]
-  if (!candidate.content || !candidate.content.parts || candidate.content.parts.length === 0) {
-    throw new Error('Gemini API returned empty content')
-  }
-
-  const text = candidate.content.parts[0].text
-  if (!text) {
-    throw new Error('Gemini API returned empty text')
-  }
-
-  return text
+  // All models failed
+  console.error('[gemini] All models failed', JSON.stringify({ 
+    modelsTried: models, 
+    error: lastError?.message 
+  }))
+  throw new Error(`Failed to generate study plan after trying all models (${models.join(', ')}). ${lastError?.message || 'Please try again later.'}`)
 }
 
 function validateGeneratedPlan(plan: any, maxDays: number, dailyMinutes: number): { valid: boolean; errors: string[] } {

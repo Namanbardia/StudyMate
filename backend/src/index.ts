@@ -11,7 +11,9 @@ export interface Env {
   APP_ORIGIN?: string
   SEARCH_CACHE_DB?: D1Database
   GEMINI_API_KEY?: string
-  GEMINI_MODEL?: string
+  GEMINI_PRIMARY_MODEL?: string
+  GEMINI_FALLBACK_MODEL_1?: string
+  GEMINI_FALLBACK_MODEL_2?: string
 }
 
 export interface AuthenticatedUser {
@@ -996,13 +998,17 @@ async function handleStudyPlanGenerate(request: Request, env: Env): Promise<Resp
 
   const plan = generationResult.plan
 
-  // Save plan to database
+  // Save plan to database atomically using batch
   const planId = crypto.randomUUID()
   const now = Math.floor(Date.now() / 1000)
   const planDataJson = JSON.stringify(plan)
 
-  try {
-    await db.prepare(
+  // Prepare all statements for atomic execution
+  const statements: D1PreparedStatement[] = []
+
+  // Plan insert statement
+  statements.push(
+    db.prepare(
       `INSERT INTO ai_study_plans (
         id, user_id, title, topic, description, knowledge_level, daily_study_time_minutes,
         target_completion_date, learning_goals, additional_instructions, total_estimated_days,
@@ -1012,14 +1018,39 @@ async function handleStudyPlanGenerate(request: Request, env: Env): Promise<Resp
       planId, user.uid, plan.title, plan.topic, plan.description, geminiInput.knowledgeLevel,
       geminiInput.dailyStudyTimeMinutes, geminiInput.targetCompletionDate, geminiInput.learningGoals,
       geminiInput.additionalInstructions || null, plan.totalEstimatedDays, 0, planDataJson, now, now
-    ).run()
+    )
+  )
 
-    // Save tasks
-    for (const module of plan.modules) {
-      for (const task of module.tasks) {
-        const taskId = crypto.randomUUID()
-        await db.prepare(
-          `INSERT INTO ai_study_plans_tasks (
+  // Task insert statements with pre-generated IDs
+  const taskRecords: Array<{
+    id: string
+    planId: string
+    userId: string
+    dayNumber: number
+    taskTitle: string
+    taskDescription: string
+    estimatedDurationMinutes: number
+    moduleName: string
+    moduleOrder: number
+  }> = []
+
+  for (const module of plan.modules) {
+    for (const task of module.tasks) {
+      const taskId = crypto.randomUUID()
+      taskRecords.push({
+        id: taskId,
+        planId,
+        userId: user.uid,
+        dayNumber: task.dayNumber,
+        taskTitle: task.taskTitle,
+        taskDescription: task.taskDescription,
+        estimatedDurationMinutes: task.estimatedDurationMinutes,
+        moduleName: task.moduleName,
+        moduleOrder: task.moduleOrder,
+      })
+      statements.push(
+        db.prepare(
+          `INSERT INTO ai_study_plan_tasks (
             id, plan_id, user_id, day_number, task_title, task_description,
             estimated_duration_minutes, module_name, module_order, is_completed,
             completed_at, created_at, updated_at
@@ -1028,11 +1059,17 @@ async function handleStudyPlanGenerate(request: Request, env: Env): Promise<Resp
           taskId, planId, user.uid, task.dayNumber, task.taskTitle, task.taskDescription,
           task.estimatedDurationMinutes, task.moduleName, task.moduleOrder, 0,
           null, now, now
-        ).run()
-      }
+        )
+      )
     }
+  }
 
-    // Return saved plan with tasks
+  try {
+    // Execute all statements atomically
+    await db.batch(statements)
+    console.info('[study-plans] Plan and tasks saved', JSON.stringify({ planId, taskCount: taskRecords.length }))
+
+    // Build response using the same IDs
     const savedPlan: StudyPlan = {
       id: planId,
       user_id: user.uid,
@@ -1051,26 +1088,21 @@ async function handleStudyPlanGenerate(request: Request, env: Env): Promise<Resp
       updated_at: now,
     }
 
-    const savedTasks: StudyPlanTask[] = []
-    for (const module of plan.modules) {
-      for (const task of module.tasks) {
-        savedTasks.push({
-          id: crypto.randomUUID(), // Note: actual IDs from DB would be better but we don't return them
-          plan_id: planId,
-          user_id: user.uid,
-          day_number: task.dayNumber,
-          task_title: task.taskTitle,
-          task_description: task.taskDescription,
-          estimated_duration_minutes: task.estimatedDurationMinutes,
-          module_name: task.moduleName,
-          module_order: task.moduleOrder,
-          is_completed: 0,
-          completed_at: null,
-          created_at: now,
-          updated_at: now,
-        })
-      }
-    }
+    const savedTasks: StudyPlanTask[] = taskRecords.map(task => ({
+      id: task.id,
+      plan_id: task.planId,
+      user_id: task.userId,
+      day_number: task.dayNumber,
+      task_title: task.taskTitle,
+      task_description: task.taskDescription,
+      estimated_duration_minutes: task.estimatedDurationMinutes,
+      module_name: task.moduleName,
+      module_order: task.moduleOrder,
+      is_completed: 0,
+      completed_at: null,
+      created_at: now,
+      updated_at: now,
+    }))
 
     // Create a response plan that includes modules for the frontend
     const responsePlan = {
@@ -1082,6 +1114,7 @@ async function handleStudyPlanGenerate(request: Request, env: Env): Promise<Resp
   } catch (error) {
     console.error('[study-plans] Failed to save generated plan', JSON.stringify({
       userId: user.uid,
+      planId,
       message: error instanceof Error ? error.message : 'Unknown error'
     }))
     return json({ success: false, message: 'Failed to save generated study plan.' }, 500)
