@@ -6,13 +6,14 @@ import {
   ChevronRight,
   X,
   History,
-  RotateCcw
+  RotateCcw,
+  Trash2
 } from 'lucide-vue-next'
 import Card from '@/components/ui/Card.vue'
 import Button from '@/components/ui/Button.vue'
 import Badge from '@/components/ui/Badge.vue'
 import { useAuthStore } from '@/stores/auth'
-import { getSearchHistory, type SearchHistoryEntry, getSearchHistoryEntry } from '@/services/api'
+import { getSearchHistory, type SearchHistoryEntry, getSearchHistoryEntry, deleteSearchHistoryEntry } from '@/services/api'
 
 const authStore = useAuthStore()
 const router = useRouter()
@@ -110,6 +111,20 @@ const clearAllHistory = async () => {
   searchHistory.value = []
   hasMore.value = false
 }
+
+const deleteHistoryEntry = async (id: string, event: Event) => {
+  event.stopPropagation()
+  if (!confirm('Delete this search from history?')) {
+    return
+  }
+  try {
+    await deleteSearchHistoryEntry(id)
+    searchHistory.value = searchHistory.value.filter(entry => entry.id !== id)
+  } catch (err) {
+    console.warn('[SearchHistory] Failed to delete entry:', err)
+    alert('Failed to delete search history entry')
+  }
+}
 </script>
 
 <template>
@@ -181,6 +196,14 @@ const clearAllHistory = async () => {
               <ChevronRight class="w-4 h-4 text-text-muted group-hover:text-accent transition-colors" />
               <span class="text-[10px] text-text-muted">{{ formatSearchDate(entry.created_at) }}</span>
             </div>
+          </button>
+          <button
+            type="button"
+            @click="deleteHistoryEntry(entry.id, $event)"
+            class="absolute right-4 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-text-muted hover:text-danger hover:bg-danger/10 transition-colors opacity-0 group-hover:opacity-100"
+            aria-label="Delete search history entry"
+          >
+            <Trash2 class="w-4 h-4" />
           </button>
         </li>
       </ul>

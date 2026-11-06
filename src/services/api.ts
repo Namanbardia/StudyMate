@@ -339,6 +339,13 @@ export async function getSearchHistoryEntry(id: string): Promise<SearchHistoryDe
   })
 }
 
+export async function deleteSearchHistoryEntry(id: string): Promise<{ success: boolean; message?: string }> {
+  return apiRequest<{ success: boolean; message?: string }>(`/api/search-history/${id}`, {
+    method: 'DELETE',
+    requiresAuth: true,
+  })
+}
+
 const inFlightSearchRequests = new Map<string, Promise<StudySearchResponse>>()
 
 // Alias for convenience

@@ -67,7 +67,7 @@ const MAX_RESULTS = 10
 const PROVIDER_CACHE_TTL_MS = 5 * 60 * 1000
 const YOUTUBE_TIMEOUT_MS = 10_000
 const TAVILY_TIMEOUT_MS = 10_000
-const DEFAULT_FIREBASE_KEYS_TIMEOUT_MS = 10_000
+const DEFAULT_FIREBASE_KEYS_TIMEOUT_MS = 30_000
 const D1_LOOKUP_TIMEOUT_MS = 1_000
 const CERT_URL = 'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com'
 const SEARCH_HISTORY_PAGE_SIZE = 20
@@ -229,9 +229,14 @@ async function handleOutboundNetworkDiagnostic(env: Env): Promise<Response> {
 
 async function fetchSigningKeys(projectId: string, timeoutMs: number): Promise<SigningKeyCacheEntry> {
   const startedAt = performance.now()
+  console.info('[auth] Starting Firebase certificate fetch', JSON.stringify({ projectId, timeoutMs, cacheSize: certCache.size }))
   try {
     const { certs, cacheControl, ageHeader } = await withTimeout('Firebase verification key request', timeoutMs, async signal => {
+      const fetchStarted = performance.now()
+      console.info('[auth] HTTP fetch to Google certs endpoint started', JSON.stringify({ url: CERT_URL }))
       const response = await fetch(CERT_URL, { signal })
+      const fetchDuration = performance.now() - fetchStarted
+      console.info('[auth] HTTP fetch completed', JSON.stringify({ status: response.status, ok: response.ok, durationMs: fetchDuration }))
       if (!response.ok) {
         throw new CertificateFetchError('http_error', `Firebase certificate endpoint returned HTTP ${response.status}.`, response.status)
       }
@@ -250,6 +255,9 @@ async function fetchSigningKeys(projectId: string, timeoutMs: number): Promise<S
         ageHeader: response.headers.get('age') || '0',
       }
     })
+
+    const totalDuration = performance.now() - startedAt
+    console.info('[auth] Certificate fetch + processing completed', JSON.stringify({ durationMs: totalDuration, keyCount: Object.keys(certs).length }))
 
     const certEntries = Object.entries(certs)
     if (certEntries.length === 0) throw new CertificateFetchError('empty_response', 'Firebase certificate endpoint returned no signing certificates.')
@@ -310,6 +318,22 @@ async function getSigningKeys(projectId: string, timeoutMs: number, forceRefresh
   }
   try {
     return (await pending).keys
+  } catch (error) {
+    // If fetch failed due to timeout/network error (not HTTP error from endpoint),
+    // fall back to expired cached keys if available
+    const isTimeoutOrNetworkError = error instanceof RequestTimeoutError ||
+      (error instanceof Error && !('status' in error))
+    const expiredCached = certCache.get(projectId)
+    if (isTimeoutOrNetworkError && expiredCached && expiredCached.keys && Object.keys(expiredCached.keys).length > 0) {
+      console.warn('[auth] Firebase certificate fetch failed, using expired cached keys as fallback', JSON.stringify({
+        reason: error instanceof Error ? error.name : 'UnknownError',
+        message: error instanceof Error ? error.message : 'Unknown error',
+        cachedKeyCount: Object.keys(expiredCached.keys).length,
+        expiredAt: expiredCached.expiresAt,
+      }))
+      return expiredCached.keys
+    }
+    throw error
   } finally {
     if (certFetches.get(projectId) === pending) certFetches.delete(projectId)
   }
@@ -726,7 +750,9 @@ async function handleSearchHistory(request: Request, env: Env): Promise<Response
       params.push(Number(cursor))
     }
 
+    console.info('[search] Fetching search history', JSON.stringify({ userId: user.uid, limit, cursor }))
     const results = await historyDb.prepare(query).bind(...params).all<SearchHistoryEntry>()
+    console.info('[search] Search history query result', JSON.stringify({ userId: user.uid, rowCount: results.results?.length || 0 }))
     const entries = results.results || []
     const hasMore = entries.length > limit
     const items = hasMore ? entries.slice(0, limit) : entries
@@ -752,24 +778,49 @@ async function handleSearchHistoryDetail(request: Request, env: Env): Promise<Re
     return json({ success: false, message: 'Search history is not configured.' }, 503)
   }
 
-  try {
-    const entry = await historyDb.prepare(
-      'SELECT id, user_id, query, search_type, result_json, created_at FROM search_history WHERE id = ?1 AND user_id = ?2'
-    ).bind(id, user.uid).first<SearchHistoryEntry>()
+  if (request.method === 'GET') {
+    try {
+      const entry = await historyDb.prepare(
+        'SELECT id, user_id, query, search_type, result_json, created_at FROM search_history WHERE id = ?1 AND user_id = ?2'
+      ).bind(id, user.uid).first<SearchHistoryEntry>()
 
-    if (!entry) {
-      return json({ success: false, message: 'Search history entry not found.' }, 404)
+      if (!entry) {
+        return json({ success: false, message: 'Search history entry not found.' }, 404)
+      }
+
+      return json({ success: true, entry })
+    } catch (error) {
+      console.error('[search] Failed to fetch search history detail', JSON.stringify({
+        userId: user.uid,
+        id,
+        message: error instanceof Error ? error.message : 'Unknown error'
+      }))
+      return json({ success: false, message: 'Failed to fetch search history entry.' }, 500)
     }
-
-    return json({ success: true, entry })
-  } catch (error) {
-    console.error('[search] Failed to fetch search history detail', JSON.stringify({
-      userId: user.uid,
-      id,
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }))
-    return json({ success: false, message: 'Failed to fetch search history entry.' }, 500)
   }
+
+  if (request.method === 'DELETE') {
+    try {
+      const result = await historyDb.prepare(
+        'DELETE FROM search_history WHERE id = ?1 AND user_id = ?2'
+      ).bind(id, user.uid).run()
+
+      if (result.meta.changes === 0) {
+        return json({ success: false, message: 'Search history entry not found.' }, 404)
+      }
+
+      return json({ success: true, message: 'Search history entry deleted.' })
+    } catch (error) {
+      console.error('[search] Failed to delete search history entry', JSON.stringify({
+        userId: user.uid,
+        id,
+        message: error instanceof Error ? error.message : 'Unknown error'
+      }))
+      return json({ success: false, message: 'Failed to delete search history entry.' }, 500)
+    }
+  }
+
+  return json({ success: false, message: 'Method not allowed.' }, 405)
 }
 
 export default {
@@ -791,6 +842,49 @@ export default {
       if (url.pathname === '/api/health' && request.method === 'GET') {
         return json({ success: true, status: 'ok' }, 200, headers)
       }
+      // Diagnostic endpoint: test Firebase certificate fetch step by step
+      if (url.pathname === '/__dev/test-cert-fetch' && request.method === 'GET') {
+        console.info('[test-cert-fetch] Endpoint hit', JSON.stringify({ pathname: url.pathname }))
+        
+        // Test 1: fetch to httpbin
+        const testUrl = 'https://httpbin.org/get'
+        const fetchStart = performance.now()
+        console.info('[test-cert-fetch] Starting fetch to httpbin', JSON.stringify({ url: testUrl }))
+        let httpbinResult: Record<string, unknown> = {}
+        try {
+          const response = await fetch(testUrl)
+          const fetchDuration = performance.now() - fetchStart
+          console.info('[test-cert-fetch] httpbin fetch completed', JSON.stringify({ status: response.status, ok: response.ok, durationMs: fetchDuration }))
+          httpbinResult = { success: true, status: response.status, ok: response.ok, durationMs: fetchDuration }
+        } catch (error) {
+          const fetchDuration = performance.now() - fetchStart
+          console.error('[test-cert-fetch] httpbin fetch failed', JSON.stringify({ error: error instanceof Error ? error.message : String(error), durationMs: fetchDuration }))
+          httpbinResult = { success: false, error: error instanceof Error ? error.message : String(error), durationMs: fetchDuration }
+        }
+        
+        // Test 2: fetch to cert URL
+        const certFetchStart = performance.now()
+        console.info('[test-cert-fetch] Starting fetch to cert URL', JSON.stringify({ url: CERT_URL }))
+        let certResult: Record<string, unknown> = {}
+        try {
+          const response = await fetch(CERT_URL)
+          const fetchDuration = performance.now() - certFetchStart
+          console.info('[test-cert-fetch] cert URL fetch completed', JSON.stringify({ status: response.status, ok: response.ok, durationMs: fetchDuration }))
+          certResult = { success: true, status: response.status, ok: response.ok, durationMs: fetchDuration }
+        } catch (error) {
+          const fetchDuration = performance.now() - certFetchStart
+          console.error('[test-cert-fetch] cert URL fetch failed', JSON.stringify({ error: error instanceof Error ? error.message : String(error), durationMs: fetchDuration }))
+          certResult = { success: false, error: error instanceof Error ? error.message : String(error), durationMs: fetchDuration }
+        }
+        
+        return json({
+          success: true,
+          httpbin: httpbinResult,
+          certUrl: certResult,
+          cacheSize: certCache.size,
+          hasProjectId: certCache.has(env.FIREBASE_PROJECT_ID || '')
+        }, 200, headers)
+      }
       if (url.pathname === '/api/search' && request.method === 'POST') {
         const response = await handleSearch(request, env, ctx)
         const responseHeaders = new Headers(response.headers)
@@ -809,7 +903,7 @@ export default {
         new Headers(headers).forEach((value, key) => responseHeaders.set(key, value))
         return new Response(response.body, { status: response.status, headers: responseHeaders })
       }
-      if (url.pathname.startsWith('/api/search-history/') && request.method === 'GET') {
+      if (url.pathname.startsWith('/api/search-history/') && (request.method === 'GET' || request.method === 'DELETE')) {
         const response = await handleSearchHistoryDetail(request, env)
         const responseHeaders = new Headers(response.headers)
         new Headers(headers).forEach((value, key) => responseHeaders.set(key, value))

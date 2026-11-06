@@ -10,7 +10,8 @@
 	"vars": {
 		"FIREBASE_PROJECT_ID": "studymate-ai-ede5a",
 		"FIREBASE_CERT_TIMEOUT_MS": "10000",
-		"APP_ORIGIN": "https://studymate.studymateapp.workers.dev"
+		"APP_ORIGIN": "https://studymate.studymateapp.workers.dev",
+		"ENABLE_DEV_DIAGNOSTICS": "true"
 	},
 	"d1_databases": [
 		{
