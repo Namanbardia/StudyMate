@@ -1191,32 +1191,33 @@ async function handleStudyPlanTaskUpdate(request: Request, env: Env): Promise<Re
   }
 
   try {
-    // Verify plan ownership
-    const plan = await db.prepare(
-      'SELECT id FROM ai_study_plans WHERE id = ?1 AND user_id = ?2'
-    ).bind(planId, user.uid).first<{ id: string }>()
-
-    if (!plan) {
-      return json({ success: false, message: 'Study plan not found.' }, 404)
-    }
-
-    // Verify task exists and belongs to plan
-    const task = await db.prepare(
-      'SELECT id, is_completed FROM ai_study_plan_tasks WHERE id = ?1 AND plan_id = ?2 AND user_id = ?3'
-    ).bind(taskId, planId, user.uid).first<{ id: string; is_completed: number }>()
-
-    if (!task) {
-      return json({ success: false, message: 'Task not found.' }, 404)
-    }
-
     const now = Math.floor(Date.now() / 1000)
     const completedAt = body.isCompleted ? now : null
 
+    // Combined query: verify plan ownership, task existence, and get current completion status in one query
+    const task = await db.prepare(
+      `SELECT t.id, t.is_completed, t.plan_id
+       FROM ai_study_plan_tasks t
+       JOIN ai_study_plans p ON t.plan_id = p.id
+       WHERE t.id = ?1 AND p.id = ?2 AND p.user_id = ?3`
+    ).bind(taskId, planId, user.uid).first<{ id: string; is_completed: number; plan_id: string }>()
+
+    if (!task) {
+      return json({ success: false, message: 'Task not found or access denied.' }, 404)
+    }
+
+    // Skip if already in desired state
+    if (task.is_completed === (body.isCompleted ? 1 : 0)) {
+      return json({ success: true, task: { ...task, is_completed: body.isCompleted ? 1 : 0, completed_at: completedAt, updated_at: Math.floor(Date.now() / 1000) }, message: 'Task already in desired state.' })
+    }
+
+    // Update task and recalculate progress in parallel where possible
+    // First update the task
     await db.prepare(
       'UPDATE ai_study_plan_tasks SET is_completed = ?1, completed_at = ?2, updated_at = ?3 WHERE id = ?4'
     ).bind(body.isCompleted ? 1 : 0, completedAt, now, taskId).run()
 
-    // Recalculate plan progress
+    // Recalculate plan progress with a single query
     const taskStats = await db.prepare(
       'SELECT COUNT(*) as total, SUM(is_completed) as completed FROM ai_study_plan_tasks WHERE plan_id = ?1'
     ).bind(planId).first<{ total: number; completed: number }>()

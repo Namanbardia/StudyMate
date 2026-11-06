@@ -12,6 +12,8 @@ import {
   Trash2,
   Sparkles,
   AlertCircle,
+  Clock,
+  Loader2,
 } from 'lucide-vue-next'
 import Card from '@/components/ui/Card.vue'
 import Button from '@/components/ui/Button.vue'
@@ -33,7 +35,23 @@ const error = ref<string | null>(null)
 const deleteModalOpen = ref(false)
 const isDeleting = ref(false)
 
-// Task grouping by module
+// Track pending task updates to prevent duplicate requests
+const pendingTaskUpdates = ref<Set<string>>(new Set())
+
+// Task grouping by day
+const days = computed(() => {
+  const dayMap = new Map<number, { dayNumber: number; tasks: StudyPlanTask[] }>()
+  tasks.value.forEach(task => {
+    const key = task.day_number
+    if (!dayMap.has(key)) {
+      dayMap.set(key, { dayNumber: task.day_number, tasks: [] })
+    }
+    dayMap.get(key)!.tasks.push(task)
+  })
+  return Array.from(dayMap.values()).sort((a, b) => a.dayNumber - b.dayNumber)
+})
+
+// Also keep module grouping for backward compatibility if needed
 const modules = computed(() => {
   const moduleMap = new Map<string, { name: string; order: number; tasks: StudyPlanTask[] }>()
   tasks.value.forEach(task => {
@@ -45,6 +63,13 @@ const modules = computed(() => {
   })
   return Array.from(moduleMap.values()).sort((a, b) => a.order - b.order)
 })
+
+// Day progress computation
+const getDayProgress = (dayTasks: StudyPlanTask[]) => {
+  const total = dayTasks.length
+  const completed = dayTasks.filter(t => t.is_completed === 1).length
+  return total > 0 ? Math.round((completed / total) * 100) : 0
+}
 
 const totalTasks = computed(() => tasks.value.length)
 const completedTasks = computed(() => tasks.value.filter(t => t.is_completed === 1).length)
@@ -98,26 +123,38 @@ onMounted(() => {
 })
 
 const handleTaskToggle = async (task: StudyPlanTask) => {
-  if (task.is_completed === 1) {
-    // Uncomplete
-    try {
-      await updateStudyPlanTask(plan.value!.id, task.id, false)
-      task.is_completed = 0
-      task.completed_at = null
-      plan.value!.progress = overallProgress.value
-    } catch (err) {
-      console.warn('[StudyPlanDetail] Failed to update task:', err)
+  const taskId = task.id
+  
+  // Prevent duplicate requests for the same task
+  if (pendingTaskUpdates.value.has(taskId)) return
+  
+  const previousCompleted = task.is_completed
+  const previousCompletedAt = task.completed_at
+  const previousProgress = plan.value?.progress ?? 0
+  
+  // Optimistic update - immediate UI feedback
+  task.is_completed = previousCompleted === 1 ? 0 : 1
+  task.completed_at = task.is_completed === 1 ? Math.floor(Date.now() / 1000) : null
+  if (plan.value) {
+    plan.value.progress = overallProgress.value
+  }
+  
+  pendingTaskUpdates.value.add(taskId)
+  
+  try {
+    await updateStudyPlanTask(plan.value!.id, task.id, task.is_completed === 1)
+  } catch (err) {
+    // Rollback on failure
+    console.warn('[StudyPlanDetail] Failed to update task:', err)
+    task.is_completed = previousCompleted
+    task.completed_at = previousCompletedAt
+    if (plan.value) {
+      plan.value.progress = previousProgress
     }
-  } else {
-    // Complete
-    try {
-      await updateStudyPlanTask(plan.value!.id, task.id, true)
-      task.is_completed = 1
-      task.completed_at = Math.floor(Date.now() / 1000)
-      plan.value!.progress = overallProgress.value
-    } catch (err) {
-      console.warn('[StudyPlanDetail] Failed to update task:', err)
-    }
+    // Show error notification (could be enhanced with a toast)
+    alert('Failed to update task. Please try again.')
+  } finally {
+    pendingTaskUpdates.value.delete(taskId)
   }
 }
 
@@ -264,40 +301,47 @@ const goBack = () => {
         </div>
       </Card>
 
-      <!-- Modules & Tasks -->
-      <div v-for="module in modules" :key="module.name" class="space-y-4">
+      <!-- Days & Tasks -->
+      <div v-for="day in days" :key="day.dayNumber" class="space-y-4">
         <Card padding="lg" class="shadow-sm border-border-subtle">
           <div class="flex items-center justify-between mb-4">
             <div class="flex items-center gap-3">
               <div class="w-10 h-10 rounded-xl bg-accent/10 text-accent flex items-center justify-center">
-                <BookOpen class="w-5 h-5" />
+                <Calendar class="w-5 h-5" />
               </div>
               <div>
-                <h3 class="text-lg font-semibold text-text-base">{{ module.name }}</h3>
-                <p class="text-xs text-text-muted">{{ module.tasks.length }} tasks</p>
+                <h3 class="text-lg font-semibold text-text-base">Day {{ day.dayNumber }}</h3>
+                <p class="text-xs text-text-muted">
+                  {{ day.tasks.filter(t => t.is_completed === 1).length }} / {{ day.tasks.length }} tasks
+                  <span class="mx-2">•</span>
+                  {{ getDayProgress(day.tasks) }}% complete
+                </p>
               </div>
             </div>
-            <div class="flex items-center gap-2 text-sm">
-              <span class="text-text-muted">{{ module.tasks.filter(t => t.is_completed === 1).length }}</span>
-              <span class="text-text-muted">/</span>
-              <span class="font-medium text-text-base">{{ module.tasks.length }}</span>
-              <span class="text-text-muted">complete</span>
+            <div class="h-2 bg-surface-muted rounded-full overflow-hidden w-32">
+              <div class="h-full bg-accent rounded-full transition-all duration-300" :style="{ width: getDayProgress(day.tasks) + '%' }"></div>
             </div>
           </div>
 
           <div class="space-y-2">
             <div
-              v-for="task in module.tasks"
+              v-for="task in day.tasks"
               :key="task.id"
               class="group p-3 rounded-lg border border-border-subtle hover:bg-surface-muted transition-colors"
             >
               <label class="flex items-start gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  :checked="task.is_completed === 1"
-                  @change="handleTaskToggle(task)"
-                  class="w-5 h-5 rounded border-border-subtle text-accent focus:ring-accent mt-0.5 shrink-0"
-                />
+                <div class="relative flex items-center justify-center w-5 h-5 shrink-0 mt-0.5">
+                  <input
+                    type="checkbox"
+                    :checked="task.is_completed === 1"
+                    @change="handleTaskToggle(task)"
+                    :disabled="pendingTaskUpdates.has(task.id)"
+                    class="w-5 h-5 rounded border-border-subtle text-accent focus:ring-accent mt-0.5 shrink-0 peer"
+                  />
+                  <div v-if="pendingTaskUpdates.has(task.id)" class="absolute inset-0 flex items-center justify-center">
+                    <Loader2 class="w-4 h-4 text-accent animate-spin" />
+                  </div>
+                </div>
                 <div class="flex-1 min-w-0">
                   <p :class="task.is_completed === 1 ? 'line-through text-text-muted' : 'text-text-base'" class="text-sm font-medium">
                     {{ task.task_title }}
@@ -311,8 +355,8 @@ const goBack = () => {
                       {{ task.estimated_duration_minutes }} min
                     </span>
                     <span class="flex items-center gap-1">
-                      <FileText class="w-2.5 h-2.5" />
-                      Day {{ task.day_number }}
+                      <BookOpen class="w-2.5 h-2.5" />
+                      {{ task.module_name }}
                     </span>
                   </div>
                 </div>
