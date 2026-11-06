@@ -1,5 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import HomeView from '@/views/HomeView.vue'
+import MyLearningView from '@/views/MyLearningView.vue'
+import SearchHistoryView from '@/views/SearchHistoryView.vue'
 import { auth } from '@/firebase/config'
 
 const router = createRouter({
@@ -43,6 +45,12 @@ const router = createRouter({
       name: 'dashboard',
       component: () => import('@/views/DashboardView.vue'),
       meta: { title: 'Student Dashboard — StudyMate AI', requiresAuth: true }
+    },
+    {
+      path: '/learning',
+      name: 'learning',
+      component: MyLearningView,
+      meta: { title: 'My Learning — StudyMate AI', requiresAuth: true }
     },
     {
       path: '/search',
@@ -91,6 +99,12 @@ const router = createRouter({
       name: 'guides',
       component: () => import('@/views/LegalView.vue'),
       meta: { title: 'Academic Guides — StudyMate AI' }
+    },
+    {
+      path: '/search-history',
+      name: 'search-history',
+      component: SearchHistoryView,
+      meta: { title: 'Search History — StudyMate AI', requiresAuth: true }
     },
     {
       path: '/safety',

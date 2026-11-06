@@ -47,6 +47,21 @@ interface SearchPayload {
   }
 }
 
+interface SearchHistoryEntry {
+  id: string
+  user_id: string
+  query: string
+  search_type: SearchType
+  result_json: string
+  created_at: number
+}
+
+interface SearchHistoryResponse {
+  success: boolean
+  history: SearchHistoryEntry[]
+  cursor?: string
+}
+
 const MAX_BODY_BYTES = 16_384
 const MAX_RESULTS = 10
 const PROVIDER_CACHE_TTL_MS = 5 * 60 * 1000
@@ -55,6 +70,8 @@ const TAVILY_TIMEOUT_MS = 10_000
 const DEFAULT_FIREBASE_KEYS_TIMEOUT_MS = 10_000
 const D1_LOOKUP_TIMEOUT_MS = 1_000
 const CERT_URL = 'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com'
+const SEARCH_HISTORY_PAGE_SIZE = 20
+const MAX_SEARCH_HISTORY_ENTRIES = 100
 interface SigningKeyCacheEntry {
   keys: Record<string, CryptoKey>
   expiresAt: number
@@ -566,6 +583,44 @@ function normalizedCacheQuery(query: string): string {
   return query.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase('en-US')
 }
 
+async function saveSearchHistory(
+  user: AuthenticatedUser,
+  query: string,
+  type: SearchType,
+  resultJson: string,
+  db: D1Database | undefined,
+): Promise<void> {
+  if (!db) return
+  try {
+    const id = crypto.randomUUID()
+    const createdAt = Math.floor(Date.now() / 1000)
+    await db.prepare(
+      'INSERT INTO search_history (id, user_id, query, search_type, result_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)'
+    ).bind(id, user.uid, query, type, resultJson, createdAt).run()
+
+    // Optional: Clean up old entries beyond the limit
+    const countResult = await db.prepare(
+      'SELECT COUNT(*) as count FROM search_history WHERE user_id = ?1'
+    ).bind(user.uid).first<{ count: number }>()
+    if (countResult && countResult.count > MAX_SEARCH_HISTORY_ENTRIES) {
+      const deleteCount = countResult.count - MAX_SEARCH_HISTORY_ENTRIES
+      await db.prepare(
+        'DELETE FROM search_history WHERE id IN (SELECT id FROM search_history WHERE user_id = ?1 ORDER BY created_at ASC LIMIT ?2)'
+      ).bind(user.uid, deleteCount).run()
+    }
+  } catch (error) {
+    console.warn('[search] Failed to save search history', JSON.stringify({
+      userId: user.uid,
+      message: error instanceof Error ? error.message : 'Unknown error'
+    }))
+  }
+}
+
+// Use SEARCH_CACHE_DB for both search_cache and search_history tables
+function getHistoryDb(env: Env): D1Database | undefined {
+  return env.SEARCH_CACHE_DB
+}
+
 async function handleSearch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const startedAt = performance.now()
   const requestId = crypto.randomUUID()
@@ -628,12 +683,93 @@ async function handleSearch(request: Request, env: Env, ctx: ExecutionContext): 
     d1CacheWriteMs: 'deferred',
     totalMs: performance.now() - startedAt,
   }))
+
+  // Save to user's search history if search was successful
+  const historyDb = getHistoryDb(env)
+  if ((youtubeOk || tavilyOk) && historyDb) {
+    const user = await verifyFirebaseToken(request, env)
+    const resultJson = JSON.stringify({
+      query,
+      type,
+      videos: youtube.value || [],
+      web: tavily.value || [],
+      providers: payload.providers,
+      timestamp: Date.now(),
+    })
+    ctx.waitUntil(saveSearchHistory(user, query, type, resultJson, historyDb))
+  }
+
   return response
 }
 
 async function handleMe(request: Request, env: Env): Promise<Response> {
   const user = await verifyFirebaseToken(request, env)
   return json({ success: true, user: { id: user.uid, uid: user.uid, email: user.email, name: user.name, avatarUrl: user.picture, subscriptionTier: 'free' } })
+}
+
+async function handleSearchHistory(request: Request, env: Env): Promise<Response> {
+  const user = await verifyFirebaseToken(request, env)
+  const url = new URL(request.url)
+  const cursor = url.searchParams.get('cursor')
+  const limit = Math.min(Number(url.searchParams.get('limit') || SEARCH_HISTORY_PAGE_SIZE), 50)
+
+  const historyDb = getHistoryDb(env)
+  if (!historyDb) {
+    return json({ success: false, message: 'Search history is not configured.' }, 503)
+  }
+
+  try {
+    let query = 'SELECT id, user_id, query, search_type, result_json, created_at FROM search_history WHERE user_id = ?1 ORDER BY created_at DESC LIMIT ?2'
+    const params: (string | number)[] = [user.uid, limit + 1]
+    if (cursor) {
+      query += ' AND created_at < ?3'
+      params.push(Number(cursor))
+    }
+
+    const results = await historyDb.prepare(query).bind(...params).all<SearchHistoryEntry>()
+    const entries = results.results || []
+    const hasMore = entries.length > limit
+    const items = hasMore ? entries.slice(0, limit) : entries
+    const nextCursor = hasMore ? String(items[items.length - 1].created_at) : undefined
+
+    return json({ success: true, history: items, cursor: nextCursor })
+  } catch (error) {
+    console.error('[search] Failed to fetch search history', JSON.stringify({
+      userId: user.uid,
+      message: error instanceof Error ? error.message : 'Unknown error'
+    }))
+    return json({ success: false, message: 'Failed to fetch search history.' }, 500)
+  }
+}
+
+async function handleSearchHistoryDetail(request: Request, env: Env): Promise<Response> {
+  const user = await verifyFirebaseToken(request, env)
+  const url = new URL(request.url)
+  const id = url.pathname.split('/').pop()
+
+  const historyDb = getHistoryDb(env)
+  if (!id || !historyDb) {
+    return json({ success: false, message: 'Search history is not configured.' }, 503)
+  }
+
+  try {
+    const entry = await historyDb.prepare(
+      'SELECT id, user_id, query, search_type, result_json, created_at FROM search_history WHERE id = ?1 AND user_id = ?2'
+    ).bind(id, user.uid).first<SearchHistoryEntry>()
+
+    if (!entry) {
+      return json({ success: false, message: 'Search history entry not found.' }, 404)
+    }
+
+    return json({ success: true, entry })
+  } catch (error) {
+    console.error('[search] Failed to fetch search history detail', JSON.stringify({
+      userId: user.uid,
+      id,
+      message: error instanceof Error ? error.message : 'Unknown error'
+    }))
+    return json({ success: false, message: 'Failed to fetch search history entry.' }, 500)
+  }
 }
 
 export default {
@@ -663,6 +799,18 @@ export default {
       }
       if (url.pathname === '/api/me' && request.method === 'GET') {
         const response = await handleMe(request, env)
+        const responseHeaders = new Headers(response.headers)
+        new Headers(headers).forEach((value, key) => responseHeaders.set(key, value))
+        return new Response(response.body, { status: response.status, headers: responseHeaders })
+      }
+      if (url.pathname === '/api/search-history' && request.method === 'GET') {
+        const response = await handleSearchHistory(request, env)
+        const responseHeaders = new Headers(response.headers)
+        new Headers(headers).forEach((value, key) => responseHeaders.set(key, value))
+        return new Response(response.body, { status: response.status, headers: responseHeaders })
+      }
+      if (url.pathname.startsWith('/api/search-history/') && request.method === 'GET') {
+        const response = await handleSearchHistoryDetail(request, env)
         const responseHeaders = new Headers(response.headers)
         new Headers(headers).forEach((value, key) => responseHeaders.set(key, value))
         return new Response(response.body, { status: response.status, headers: responseHeaders })

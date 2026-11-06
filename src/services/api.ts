@@ -82,6 +82,27 @@ export interface StudySearchResponse {
   message?: string
 }
 
+export interface SearchHistoryEntry {
+  id: string
+  user_id: string
+  query: string
+  search_type: SearchType
+  result_json: string
+  created_at: number
+}
+
+export interface SearchHistoryResponse {
+  success: boolean
+  history: SearchHistoryEntry[]
+  cursor?: string
+}
+
+export interface SearchHistoryDetailResponse {
+  success: boolean
+  entry?: SearchHistoryEntry
+  message?: string
+}
+
 /**
  * Base URL for the Cloudflare API Worker.
  * Defaults to import.meta.env.VITE_API_BASE_URL if configured.
@@ -299,6 +320,23 @@ export async function searchStudyResources(query: string, type: SearchType): Pro
   })
   inFlightSearchRequests.set(dedupeKey, request)
   return request
+}
+
+export async function getSearchHistory(limit = 20, cursor?: string): Promise<SearchHistoryResponse> {
+  const params: Record<string, string> = { limit: String(limit) }
+  if (cursor) params.cursor = cursor
+  return apiRequest<SearchHistoryResponse>('/api/search-history', {
+    method: 'GET',
+    requiresAuth: true,
+    params,
+  })
+}
+
+export async function getSearchHistoryEntry(id: string): Promise<SearchHistoryDetailResponse> {
+  return apiRequest<SearchHistoryDetailResponse>(`/api/search-history/${id}`, {
+    method: 'GET',
+    requiresAuth: true,
+  })
 }
 
 const inFlightSearchRequests = new Map<string, Promise<StudySearchResponse>>()

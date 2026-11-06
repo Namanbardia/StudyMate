@@ -2,7 +2,7 @@
 import { computed, onMounted } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import {
-  LayoutDashboard, Bot, GraduationCap, CalendarDays, Library, ChartNoAxesCombined,
+  LayoutDashboard, Bot, GraduationCap, ChartNoAxesCombined,
   UserRound, Settings, LogOut, PanelLeftClose, PanelLeftOpen, X
 } from 'lucide-vue-next'
 import { useUIStore } from '@/stores/ui'
@@ -24,9 +24,7 @@ onMounted(() => {
 const mainItems = [
   { label: 'Dashboard', to: '/dashboard', icon: LayoutDashboard, implemented: true },
   { label: 'AI Tutor', to: '/search', icon: Bot, implemented: true },
-  { label: 'My Learning', to: '/learning', icon: GraduationCap, implemented: false },
-  { label: 'Study Planner', to: '/planner', icon: CalendarDays, implemented: false },
-  { label: 'My Resources', to: '/resources', icon: Library, implemented: false },
+  { label: 'My Learning', to: '/learning', icon: GraduationCap, implemented: true },
   { label: 'Progress & Analytics', to: '/progress', icon: ChartNoAxesCombined, implemented: false }
 ]
 const personalItems = [

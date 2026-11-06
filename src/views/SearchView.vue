@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import {
   Search,
   Sparkles,
@@ -14,18 +15,31 @@ import {
   Code,
   Database,
   Monitor,
-  Bot
+  Bot,
+  RotateCcw
 } from 'lucide-vue-next'
 import Card from '@/components/ui/Card.vue'
 import Button from '@/components/ui/Button.vue'
 import Badge from '@/components/ui/Badge.vue'
 import YouTubeResultCard from '@/components/search/YouTubeResultCard.vue'
 import WebResultCard from '@/components/search/WebResultCard.vue'
-import { ApiError, searchStudyResources, type SearchType, type StudySearchResponse } from '@/services/api'
+import { ApiError, searchStudyResources, type SearchType, type StudySearchResponse, getSearchHistoryEntry } from '@/services/api'
 
 // Import suggested topics from JSON
 // Topics can be managed directly through this JSON file without code changes
 import suggestedTopics from '@/data/suggestedTopics.json'
+
+const SEARCH_STORAGE_KEY = 'studymate:search:snapshot'
+
+interface SearchSnapshot {
+  query: string
+  type: SearchType
+  results: StudySearchResponse
+  timestamp: number
+}
+
+const route = useRoute()
+const router = useRouter()
 
 const searchQuery = ref('')
 const searchInput = ref<HTMLInputElement | null>(null)
@@ -55,6 +69,87 @@ const iconMap = {
   bot: Bot
 } as const
 
+// Load search snapshot from localStorage or restore from history on mount
+onMounted(async () => {
+  // Check if we're restoring from search history
+  const restoreId = route.query.restore as string | undefined
+  if (restoreId) {
+    await restoreFromHistory(restoreId)
+    return
+  }
+
+  // Check for query parameters (fallback)
+  const queryParam = route.query.q as string | undefined
+  const typeParam = route.query.type as SearchType | undefined
+  if (queryParam) {
+    searchQuery.value = queryParam
+    selectedType.value = typeParam || 'all'
+    await handleSearch()
+    return
+  }
+
+  // Otherwise, try localStorage snapshot
+  try {
+    const stored = localStorage.getItem(SEARCH_STORAGE_KEY)
+    if (stored) {
+      const snapshot = JSON.parse(stored) as SearchSnapshot
+      // Only restore if snapshot is recent (within 24 hours)
+      if (Date.now() - snapshot.timestamp < 24 * 60 * 60 * 1000) {
+        searchQuery.value = snapshot.query
+        selectedType.value = snapshot.type
+        results.value = snapshot.results
+        hasSearched.value = true
+      } else {
+        localStorage.removeItem(SEARCH_STORAGE_KEY)
+      }
+    }
+  } catch (error) {
+    console.warn('[SearchView] Failed to restore search snapshot:', error)
+    localStorage.removeItem(SEARCH_STORAGE_KEY)
+  }
+})
+
+const restoreFromHistory = async (id: string) => {
+  try {
+    const response = await getSearchHistoryEntry(id)
+    if (response.success && response.entry) {
+      const resultData = JSON.parse(response.entry.result_json)
+      searchQuery.value = response.entry.query
+      selectedType.value = response.entry.search_type
+      results.value = {
+        success: true,
+        query: resultData.query,
+        type: resultData.type,
+        videos: resultData.videos,
+        web: resultData.web,
+        providers: resultData.providers,
+      }
+      hasSearched.value = true
+      // Clear the restore query param from URL
+      await router.replace({ path: '/search' })
+    }
+  } catch (error) {
+    console.warn('[SearchView] Failed to restore from history:', error)
+  }
+}
+
+// Save search snapshot to localStorage when results change
+watch(results, (newResults) => {
+  if (newResults && searchQuery.value) {
+    const snapshot: SearchSnapshot = {
+      query: searchQuery.value,
+      type: selectedType.value,
+      results: newResults,
+      timestamp: Date.now(),
+    }
+    try {
+      localStorage.setItem(SEARCH_STORAGE_KEY, JSON.stringify(snapshot))
+    } catch (error) {
+      console.warn('[SearchView] Failed to save search snapshot:', error)
+    }
+  }
+}, { deep: true })
+
 const handleSearch = async () => {
   const query = searchQuery.value.trim()
   if (!query || isLoading.value) return
@@ -83,14 +178,37 @@ const selectTopic = (topic: string) => {
   searchInput.value?.focus()
   handleSearch()
 }
+
+const clearSearch = () => {
+  searchQuery.value = ''
+  selectedType.value = 'all'
+  results.value = null
+  hasSearched.value = false
+  errorMessage.value = ''
+  localStorage.removeItem(SEARCH_STORAGE_KEY)
+  searchInput.value?.focus()
+}
 </script>
 
 <template>
   <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 space-y-8">
-    <div class="pb-6 border-b border-border-subtle">
-      <Badge variant="accent" size="sm"><Sparkles class="w-3 h-3 mr-1" /> AI Learning Engine</Badge>
-      <h1 class="text-2xl sm:text-3xl font-serif font-bold text-text-base mt-2">AI Tutor &amp; Resource Search</h1>
-      <p class="text-sm text-text-muted mt-1 max-w-2xl">Search YouTube lessons and trusted web resources for any subject. Choose a source or search both at once.</p>
+    <div class="pb-6 border-b border-border-subtle flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div>
+        <Badge variant="accent" size="sm"><Sparkles class="w-3 h-3 mr-1" /> AI Learning Engine</Badge>
+        <h1 class="text-2xl sm:text-3xl font-serif font-bold text-text-base mt-2">AI Tutor & Resource Search</h1>
+        <p class="text-sm text-text-muted mt-1 max-w-2xl">Search YouTube lessons and trusted web resources for any subject. Choose a source or search both at once.</p>
+      </div>
+      <div v-if="hasSearched" class="flex items-center gap-2">
+        <button
+          type="button"
+          @click="clearSearch"
+          class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-text-muted hover:text-text-base hover:bg-surface-muted border border-border-subtle transition-colors"
+          title="New Search"
+        >
+          <RotateCcw class="w-3.5 h-3.5" />
+          <span>New Search</span>
+        </button>
+      </div>
     </div>
 
     <Card padding="lg" class="space-y-5 shadow-sm border-border-subtle">
