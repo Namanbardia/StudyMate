@@ -5,7 +5,7 @@ interface Props {
   placeholder?: string
   disabled?: boolean
   label?: string
-  error?: string
+  error?: string | null
   id?: string
   required?: boolean
   autoFocus?: boolean

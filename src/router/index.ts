@@ -2,6 +2,9 @@ import { createRouter, createWebHistory } from 'vue-router'
 import HomeView from '@/views/HomeView.vue'
 import MyLearningView from '@/views/MyLearningView.vue'
 import SearchHistoryView from '@/views/SearchHistoryView.vue'
+import StudyPlannerView from '@/views/StudyPlannerView.vue'
+import StudyPlanDetailView from '@/views/StudyPlanDetailView.vue'
+import CreateStudyPlanView from '@/views/CreateStudyPlanView.vue'
 import { auth } from '@/firebase/config'
 
 const router = createRouter({
@@ -105,6 +108,24 @@ const router = createRouter({
       name: 'search-history',
       component: SearchHistoryView,
       meta: { title: 'Search History — StudyMate AI', requiresAuth: true }
+    },
+    {
+      path: '/planner',
+      name: 'study-planner',
+      component: StudyPlannerView,
+      meta: { title: 'Study Planner — StudyMate AI', requiresAuth: true }
+    },
+    {
+      path: '/planner/create',
+      name: 'create-study-plan',
+      component: CreateStudyPlanView,
+      meta: { title: 'Create Study Plan — StudyMate AI', requiresAuth: true }
+    },
+    {
+      path: '/planner/:id',
+      name: 'study-plan-detail',
+      component: StudyPlanDetailView,
+      meta: { title: 'Study Plan — StudyMate AI', requiresAuth: true }
     },
     {
       path: '/safety',

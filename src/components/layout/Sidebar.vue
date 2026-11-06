@@ -3,7 +3,7 @@ import { computed, onMounted } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import {
   LayoutDashboard, Bot, GraduationCap, ChartNoAxesCombined,
-  UserRound, Settings, LogOut, PanelLeftClose, PanelLeftOpen, X
+  UserRound, Settings, LogOut, PanelLeftClose, PanelLeftOpen, X, BookOpen
 } from 'lucide-vue-next'
 import { useUIStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
@@ -25,6 +25,7 @@ const mainItems = [
   { label: 'Dashboard', to: '/dashboard', icon: LayoutDashboard, implemented: true },
   { label: 'AI Tutor', to: '/search', icon: Bot, implemented: true },
   { label: 'My Learning', to: '/learning', icon: GraduationCap, implemented: true },
+  { label: 'Study Planner', to: '/planner', icon: BookOpen, implemented: true },
   { label: 'Progress & Analytics', to: '/progress', icon: ChartNoAxesCombined, implemented: false }
 ]
 const personalItems = [

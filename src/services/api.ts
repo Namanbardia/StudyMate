@@ -103,6 +103,112 @@ export interface SearchHistoryDetailResponse {
   message?: string
 }
 
+// Study Planner types
+export type KnowledgeLevel = 'beginner' | 'intermediate' | 'advanced'
+
+export interface StudyPlanTask {
+  id: string
+  plan_id: string
+  user_id: string
+  day_number: number
+  task_title: string
+  task_description: string
+  estimated_duration_minutes: number
+  module_name: string
+  module_order: number
+  is_completed: number
+  completed_at: number | null
+  created_at: number
+  updated_at: number
+}
+
+export interface StudyPlan {
+  id: string
+  user_id: string
+  title: string
+  topic: string
+  description: string
+  knowledge_level: KnowledgeLevel
+  daily_study_time_minutes: number
+  target_completion_date: number
+  learning_goals: string
+  additional_instructions: string | null
+  total_estimated_days: number
+  progress: number
+  plan_data_json: string
+  created_at: number
+  updated_at: number
+}
+
+export interface StudyPlanListResponse {
+  success: boolean
+  plans: StudyPlan[]
+}
+
+export interface StudyPlanDetailResponse {
+  success: boolean
+  plan?: StudyPlan
+  tasks?: StudyPlanTask[]
+  message?: string
+}
+
+export interface GeneratedStudyPlanModule {
+  moduleName: string
+  moduleOrder: number
+  description: string
+  tasks: {
+    dayNumber: number
+    taskTitle: string
+    taskDescription: string
+    estimatedDurationMinutes: number
+    moduleName: string
+    moduleOrder: number
+  }[]
+}
+
+export interface GeneratedStudyPlan {
+  id: string
+  title: string
+  topic: string
+  description: string
+  learningObjectives: string[]
+  totalEstimatedDays: number
+  modules: GeneratedStudyPlanModule[]
+  finalRevisionAndAssessment: string
+}
+
+export interface StudyPlanGenerateRequest {
+  topic: string
+  knowledgeLevel: KnowledgeLevel
+  dailyStudyTimeMinutes: number
+  targetCompletionDate: number
+  learningGoals: string
+  additionalInstructions?: string
+}
+
+export interface StudyPlanGenerateResponse {
+  success: boolean
+  plan?: GeneratedStudyPlan
+  tasks?: StudyPlanTask[]
+  error?: string
+  message?: string
+}
+
+export interface StudyPlanTaskUpdateRequest {
+  isCompleted: boolean
+}
+
+export interface StudyPlanTaskUpdateResponse {
+  success: boolean
+  task?: StudyPlanTask
+  message?: string
+}
+
+export interface StudyPlanDeleteResponse {
+  success: boolean
+  message?: string
+}
+
 /**
  * Base URL for the Cloudflare API Worker.
  * Defaults to import.meta.env.VITE_API_BASE_URL if configured.
@@ -341,6 +447,44 @@ export async function getSearchHistoryEntry(id: string): Promise<SearchHistoryDe
 
 export async function deleteSearchHistoryEntry(id: string): Promise<{ success: boolean; message?: string }> {
   return apiRequest<{ success: boolean; message?: string }>(`/api/search-history/${id}`, {
+    method: 'DELETE',
+    requiresAuth: true,
+  })
+}
+
+// Study Planner API functions
+export async function getStudyPlans(): Promise<StudyPlanListResponse> {
+  return apiRequest<StudyPlanListResponse>('/api/study-plans', {
+    method: 'GET',
+    requiresAuth: true,
+  })
+}
+
+export async function generateStudyPlan(input: StudyPlanGenerateRequest): Promise<StudyPlanGenerateResponse> {
+  return apiRequest<StudyPlanGenerateResponse>('/api/study-plans/generate', {
+    method: 'POST',
+    requiresAuth: true,
+    body: JSON.stringify(input),
+  })
+}
+
+export async function getStudyPlan(id: string): Promise<StudyPlanDetailResponse> {
+  return apiRequest<StudyPlanDetailResponse>(`/api/study-plans/${id}`, {
+    method: 'GET',
+    requiresAuth: true,
+  })
+}
+
+export async function updateStudyPlanTask(planId: string, taskId: string, isCompleted: boolean): Promise<StudyPlanTaskUpdateResponse> {
+  return apiRequest<StudyPlanTaskUpdateResponse>(`/api/study-plans/${planId}/tasks/${taskId}`, {
+    method: 'PATCH',
+    requiresAuth: true,
+    body: JSON.stringify({ isCompleted }),
+  })
+}
+
+export async function deleteStudyPlan(id: string): Promise<StudyPlanDeleteResponse> {
+  return apiRequest<StudyPlanDeleteResponse>(`/api/study-plans/${id}`, {
     method: 'DELETE',
     requiresAuth: true,
   })

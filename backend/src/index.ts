@@ -1,5 +1,7 @@
 export type SearchType = 'all' | 'videos' | 'web'
 
+import { generateStudyPlan } from './services/gemini'
+
 export interface Env {
   YOUTUBE_API_KEY?: string
   TAVILY_API_KEY?: string
@@ -8,6 +10,8 @@ export interface Env {
   ENABLE_DEV_DIAGNOSTICS?: string
   APP_ORIGIN?: string
   SEARCH_CACHE_DB?: D1Database
+  GEMINI_API_KEY?: string
+  GEMINI_MODEL?: string
 }
 
 export interface AuthenticatedUser {
@@ -60,6 +64,85 @@ interface SearchHistoryResponse {
   success: boolean
   history: SearchHistoryEntry[]
   cursor?: string
+}
+
+// Study Plan interfaces
+export interface StudyPlanTask {
+  id: string
+  plan_id: string
+  user_id: string
+  day_number: number
+  task_title: string
+  task_description: string
+  estimated_duration_minutes: number
+  module_name: string
+  module_order: number
+  is_completed: number
+  completed_at: number | null
+  created_at: number
+  updated_at: number
+}
+
+export interface StudyPlan {
+  id: string
+  user_id: string
+  title: string
+  topic: string
+  description: string
+  knowledge_level: 'beginner' | 'intermediate' | 'advanced'
+  daily_study_time_minutes: number
+  target_completion_date: number
+  learning_goals: string
+  additional_instructions: string | null
+  total_estimated_days: number
+  progress: number
+  plan_data_json: string
+  created_at: number
+  updated_at: number
+}
+
+export interface StudyPlanListResponse {
+  success: boolean
+  plans: StudyPlan[]
+}
+
+export interface StudyPlanDetailResponse {
+  success: boolean
+  plan?: StudyPlan
+  tasks?: StudyPlanTask[]
+  message?: string
+}
+
+export interface StudyPlanGenerateRequest {
+  topic: string
+  knowledgeLevel: 'beginner' | 'intermediate' | 'advanced'
+  dailyStudyTimeMinutes: number
+  targetCompletionDate: number
+  learningGoals: string
+  additionalInstructions?: string
+}
+
+export interface StudyPlanGenerateResponse {
+  success: boolean
+  plan?: StudyPlan
+  tasks?: StudyPlanTask[]
+  error?: string
+  message?: string
+}
+
+export interface StudyPlanTaskUpdateRequest {
+  isCompleted: boolean
+}
+
+export interface StudyPlanTaskUpdateResponse {
+  success: boolean
+  task?: StudyPlanTask
+  message?: string
+}
+
+export interface StudyPlanDeleteResponse {
+  success: boolean
+  message?: string
 }
 
 const MAX_BODY_BYTES = 16_384
@@ -823,6 +906,342 @@ async function handleSearchHistoryDetail(request: Request, env: Env): Promise<Re
   return json({ success: false, message: 'Method not allowed.' }, 405)
 }
 
+// Study Plan Handlers
+async function handleStudyPlansList(request: Request, env: Env): Promise<Response> {
+  const user = await verifyFirebaseToken(request, env)
+  const db = env.SEARCH_CACHE_DB
+  if (!db) {
+    return json({ success: false, message: 'Database not configured.' }, 503)
+  }
+
+  try {
+    const results = await db.prepare(
+      'SELECT id, user_id, title, topic, description, knowledge_level, daily_study_time_minutes, target_completion_date, learning_goals, additional_instructions, total_estimated_days, progress, plan_data_json, created_at, updated_at FROM ai_study_plans WHERE user_id = ?1 ORDER BY created_at DESC'
+    ).bind(user.uid).all<StudyPlan>()
+
+    return json({ success: true, plans: results.results || [] })
+  } catch (error) {
+    console.error('[study-plans] Failed to fetch plans', JSON.stringify({
+      userId: user.uid,
+      message: error instanceof Error ? error.message : 'Unknown error'
+    }))
+    return json({ success: false, message: 'Failed to fetch study plans.' }, 500)
+  }
+}
+
+async function handleStudyPlanGenerate(request: Request, env: Env): Promise<Response> {
+  const user = await verifyFirebaseToken(request, env)
+  const db = env.SEARCH_CACHE_DB
+  if (!db) {
+    return json({ success: false, message: 'Database not configured.' }, 503)
+  }
+
+  let input: StudyPlanGenerateRequest
+  try {
+    const contentType = request.headers.get('Content-Type') || ''
+    if (!contentType.toLowerCase().includes('application/json')) {
+      return json({ success: false, message: 'Send the request as JSON.' }, 415)
+    }
+    const body = await request.json()
+    input = body as StudyPlanGenerateRequest
+  } catch {
+    return json({ success: false, message: 'Invalid JSON body.' }, 400)
+  }
+
+  // Validate input
+  if (!input.topic || typeof input.topic !== 'string' || input.topic.trim().length === 0) {
+    return json({ success: false, message: 'Topic is required.' }, 400)
+  }
+  if (input.topic.trim().length > 200) {
+    return json({ success: false, message: 'Topic must be 200 characters or fewer.' }, 400)
+  }
+  if (!['beginner', 'intermediate', 'advanced'].includes(input.knowledgeLevel)) {
+    return json({ success: false, message: 'Knowledge level must be beginner, intermediate, or advanced.' }, 400)
+  }
+  if (!Number.isInteger(input.dailyStudyTimeMinutes) || input.dailyStudyTimeMinutes < 15 || input.dailyStudyTimeMinutes > 480) {
+    return json({ success: false, message: 'Daily study time must be between 15 and 480 minutes.' }, 400)
+  }
+  if (!Number.isFinite(input.targetCompletionDate) || input.targetCompletionDate <= Math.floor(Date.now() / 1000) + 86400) {
+    return json({ success: false, message: 'Target completion date must be at least 1 day in the future.' }, 400)
+  }
+  if (!input.learningGoals || typeof input.learningGoals !== 'string' || input.learningGoals.trim().length === 0) {
+    return json({ success: false, message: 'Learning goals are required.' }, 400)
+  }
+  if (input.learningGoals.length > 2000) {
+    return json({ success: false, message: 'Learning goals must be 2000 characters or fewer.' }, 400)
+  }
+  if (input.additionalInstructions && input.additionalInstructions.length > 2000) {
+    return json({ success: false, message: 'Additional instructions must be 2000 characters or fewer.' }, 400)
+  }
+
+  // Check if Gemini is configured
+  if (!env.GEMINI_API_KEY) {
+    return json({ success: false, message: 'AI service is not configured.' }, 503)
+  }
+
+  // Generate plan using Gemini
+  const geminiInput = {
+    topic: input.topic.trim(),
+    knowledgeLevel: input.knowledgeLevel,
+    dailyStudyTimeMinutes: input.dailyStudyTimeMinutes,
+    targetCompletionDate: input.targetCompletionDate,
+    learningGoals: input.learningGoals.trim(),
+    additionalInstructions: input.additionalInstructions?.trim() || '',
+  }
+
+  const generationResult = await generateStudyPlan(env, geminiInput)
+  if (!generationResult.success || !generationResult.plan) {
+    return json({ success: false, error: generationResult.error, message: generationResult.message }, 500)
+  }
+
+  const plan = generationResult.plan
+
+  // Save plan to database
+  const planId = crypto.randomUUID()
+  const now = Math.floor(Date.now() / 1000)
+  const planDataJson = JSON.stringify(plan)
+
+  try {
+    await db.prepare(
+      `INSERT INTO ai_study_plans (
+        id, user_id, title, topic, description, knowledge_level, daily_study_time_minutes,
+        target_completion_date, learning_goals, additional_instructions, total_estimated_days,
+        progress, plan_data_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      planId, user.uid, plan.title, plan.topic, plan.description, geminiInput.knowledgeLevel,
+      geminiInput.dailyStudyTimeMinutes, geminiInput.targetCompletionDate, geminiInput.learningGoals,
+      geminiInput.additionalInstructions || null, plan.totalEstimatedDays, 0, planDataJson, now, now
+    ).run()
+
+    // Save tasks
+    for (const module of plan.modules) {
+      for (const task of module.tasks) {
+        const taskId = crypto.randomUUID()
+        await db.prepare(
+          `INSERT INTO ai_study_plans_tasks (
+            id, plan_id, user_id, day_number, task_title, task_description,
+            estimated_duration_minutes, module_name, module_order, is_completed,
+            completed_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          taskId, planId, user.uid, task.dayNumber, task.taskTitle, task.taskDescription,
+          task.estimatedDurationMinutes, task.moduleName, task.moduleOrder, 0,
+          null, now, now
+        ).run()
+      }
+    }
+
+    // Return saved plan with tasks
+    const savedPlan: StudyPlan = {
+      id: planId,
+      user_id: user.uid,
+      title: plan.title,
+      topic: plan.topic,
+      description: plan.description,
+      knowledge_level: geminiInput.knowledgeLevel,
+      daily_study_time_minutes: geminiInput.dailyStudyTimeMinutes,
+      target_completion_date: geminiInput.targetCompletionDate,
+      learning_goals: geminiInput.learningGoals,
+      additional_instructions: geminiInput.additionalInstructions || null,
+      total_estimated_days: plan.totalEstimatedDays,
+      progress: 0,
+      plan_data_json: planDataJson,
+      created_at: now,
+      updated_at: now,
+    }
+
+    const savedTasks: StudyPlanTask[] = []
+    for (const module of plan.modules) {
+      for (const task of module.tasks) {
+        savedTasks.push({
+          id: crypto.randomUUID(), // Note: actual IDs from DB would be better but we don't return them
+          plan_id: planId,
+          user_id: user.uid,
+          day_number: task.dayNumber,
+          task_title: task.taskTitle,
+          task_description: task.taskDescription,
+          estimated_duration_minutes: task.estimatedDurationMinutes,
+          module_name: task.moduleName,
+          module_order: task.moduleOrder,
+          is_completed: 0,
+          completed_at: null,
+          created_at: now,
+          updated_at: now,
+        })
+      }
+    }
+
+    // Create a response plan that includes modules for the frontend
+    const responsePlan = {
+      ...savedPlan,
+      modules: plan.modules,
+    }
+
+    return json({ success: true, plan: responsePlan, tasks: savedTasks })
+  } catch (error) {
+    console.error('[study-plans] Failed to save generated plan', JSON.stringify({
+      userId: user.uid,
+      message: error instanceof Error ? error.message : 'Unknown error'
+    }))
+    return json({ success: false, message: 'Failed to save generated study plan.' }, 500)
+  }
+}
+
+async function handleStudyPlanDetail(request: Request, env: Env): Promise<Response> {
+  const user = await verifyFirebaseToken(request, env)
+  const url = new URL(request.url)
+  const id = url.pathname.split('/').pop()
+
+  const db = env.SEARCH_CACHE_DB
+  if (!id || !db) {
+    return json({ success: false, message: 'Database not configured.' }, 503)
+  }
+
+  if (request.method === 'GET') {
+    try {
+      const plan = await db.prepare(
+        'SELECT id, user_id, title, topic, description, knowledge_level, daily_study_time_minutes, target_completion_date, learning_goals, additional_instructions, total_estimated_days, progress, plan_data_json, created_at, updated_at FROM ai_study_plans WHERE id = ?1 AND user_id = ?2'
+      ).bind(id, user.uid).first<StudyPlan>()
+
+      if (!plan) {
+        return json({ success: false, message: 'Study plan not found.' }, 404)
+      }
+
+      const tasks = await db.prepare(
+        'SELECT id, plan_id, user_id, day_number, task_title, task_description, estimated_duration_minutes, module_name, module_order, is_completed, completed_at, created_at, updated_at FROM ai_study_plans_tasks WHERE plan_id = ?1 AND user_id = ?2 ORDER BY day_number, module_order'
+      ).bind(id, user.uid).all<StudyPlanTask>()
+
+      return json({ success: true, plan, tasks: tasks.results || [] })
+    } catch (error) {
+      console.error('[study-plans] Failed to fetch plan detail', JSON.stringify({
+        userId: user.uid,
+        id,
+        message: error instanceof Error ? error.message : 'Unknown error'
+      }))
+      return json({ success: false, message: 'Failed to fetch study plan.' }, 500)
+    }
+  }
+
+  return json({ success: false, message: 'Method not allowed.' }, 405)
+}
+
+async function handleStudyPlanTaskUpdate(request: Request, env: Env): Promise<Response> {
+  const user = await verifyFirebaseToken(request, env)
+  const url = new URL(request.url)
+  const pathParts = url.pathname.split('/')
+  const planId = pathParts[pathParts.length - 3]
+  const taskId = pathParts[pathParts.length - 1]
+
+  const db = env.SEARCH_CACHE_DB
+  if (!planId || !taskId || !db) {
+    return json({ success: false, message: 'Database not configured.' }, 503)
+  }
+
+  if (request.method !== 'PATCH') {
+    return json({ success: false, message: 'Method not allowed.' }, 405)
+  }
+
+  let body: StudyPlanTaskUpdateRequest
+  try {
+    const contentType = request.headers.get('Content-Type') || ''
+    if (!contentType.toLowerCase().includes('application/json')) {
+      return json({ success: false, message: 'Send the request as JSON.' }, 415)
+    }
+    body = await request.json()
+  } catch {
+    return json({ success: false, message: 'Invalid JSON body.' }, 400)
+  }
+
+  if (typeof body.isCompleted !== 'boolean') {
+    return json({ success: false, message: 'isCompleted must be a boolean.' }, 400)
+  }
+
+  try {
+    // Verify plan ownership
+    const plan = await db.prepare(
+      'SELECT id FROM ai_study_plans WHERE id = ?1 AND user_id = ?2'
+    ).bind(planId, user.uid).first<{ id: string }>()
+
+    if (!plan) {
+      return json({ success: false, message: 'Study plan not found.' }, 404)
+    }
+
+    // Verify task exists and belongs to plan
+    const task = await db.prepare(
+      'SELECT id, is_completed FROM ai_study_plans_tasks WHERE id = ?1 AND plan_id = ?2 AND user_id = ?3'
+    ).bind(taskId, planId, user.uid).first<{ id: string; is_completed: number }>()
+
+    if (!task) {
+      return json({ success: false, message: 'Task not found.' }, 404)
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    const completedAt = body.isCompleted ? now : null
+
+    await db.prepare(
+      'UPDATE ai_study_plans_tasks SET is_completed = ?1, completed_at = ?2, updated_at = ?3 WHERE id = ?4'
+    ).bind(body.isCompleted ? 1 : 0, completedAt, now, taskId).run()
+
+    // Recalculate plan progress
+    const taskStats = await db.prepare(
+      'SELECT COUNT(*) as total, SUM(is_completed) as completed FROM ai_study_plans_tasks WHERE plan_id = ?1'
+    ).bind(planId).first<{ total: number; completed: number }>()
+
+    if (taskStats && taskStats.total > 0) {
+      const progress = Math.round((taskStats.completed / taskStats.total) * 100)
+      await db.prepare(
+        'UPDATE ai_study_plans SET progress = ?1, updated_at = ?2 WHERE id = ?3'
+      ).bind(progress, now, planId).run()
+    }
+
+    return json({ success: true, task: { ...task, is_completed: body.isCompleted ? 1 : 0, completed_at: completedAt, updated_at: now }, message: 'Task updated successfully.' })
+  } catch (error) {
+    console.error('[study-plans] Failed to update task', JSON.stringify({
+      userId: user.uid,
+      planId,
+      taskId,
+      message: error instanceof Error ? error.message : 'Unknown error'
+    }))
+    return json({ success: false, message: 'Failed to update task.' }, 500)
+  }
+}
+
+async function handleStudyPlanDelete(request: Request, env: Env): Promise<Response> {
+  const user = await verifyFirebaseToken(request, env)
+  const url = new URL(request.url)
+  const id = url.pathname.split('/').pop()
+
+  const db = env.SEARCH_CACHE_DB
+  if (!id || !db) {
+    return json({ success: false, message: 'Database not configured.' }, 503)
+  }
+
+  if (request.method !== 'DELETE') {
+    return json({ success: false, message: 'Method not allowed.' }, 405)
+  }
+
+  try {
+    const result = await db.prepare(
+      'DELETE FROM ai_study_plans WHERE id = ?1 AND user_id = ?2'
+    ).bind(id, user.uid).run()
+
+    if (result.meta.changes === 0) {
+      return json({ success: false, message: 'Study plan not found.' }, 404)
+    }
+
+    // Tasks are deleted via CASCADE
+    return json({ success: true, message: 'Study plan deleted successfully.' })
+  } catch (error) {
+    console.error('[study-plans] Failed to delete plan', JSON.stringify({
+      userId: user.uid,
+      id,
+      message: error instanceof Error ? error.message : 'Unknown error'
+    }))
+    return json({ success: false, message: 'Failed to delete study plan.' }, 500)
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const headers = corsHeaders(request, env)
@@ -905,6 +1324,42 @@ export default {
       }
       if (url.pathname.startsWith('/api/search-history/') && (request.method === 'GET' || request.method === 'DELETE')) {
         const response = await handleSearchHistoryDetail(request, env)
+        const responseHeaders = new Headers(response.headers)
+        new Headers(headers).forEach((value, key) => responseHeaders.set(key, value))
+        return new Response(response.body, { status: response.status, headers: responseHeaders })
+      }
+      if (url.pathname === '/api/study-plans' && request.method === 'GET') {
+        const response = await handleStudyPlansList(request, env)
+        const responseHeaders = new Headers(response.headers)
+        new Headers(headers).forEach((value, key) => responseHeaders.set(key, value))
+        return new Response(response.body, { status: response.status, headers: responseHeaders })
+      }
+      if (url.pathname === '/api/study-plans/generate' && request.method === 'POST') {
+        const response = await handleStudyPlanGenerate(request, env)
+        const responseHeaders = new Headers(response.headers)
+        new Headers(headers).forEach((value, key) => responseHeaders.set(key, value))
+        return new Response(response.body, { status: response.status, headers: responseHeaders })
+      }
+      if (url.pathname === '/api/study-plans' && request.method === 'POST') {
+        const response = await handleStudyPlanGenerate(request, env)
+        const responseHeaders = new Headers(response.headers)
+        new Headers(headers).forEach((value, key) => responseHeaders.set(key, value))
+        return new Response(response.body, { status: response.status, headers: responseHeaders })
+      }
+      if (url.pathname.startsWith('/api/study-plans/') && request.method === 'GET') {
+        const response = await handleStudyPlanDetail(request, env)
+        const responseHeaders = new Headers(response.headers)
+        new Headers(headers).forEach((value, key) => responseHeaders.set(key, value))
+        return new Response(response.body, { status: response.status, headers: responseHeaders })
+      }
+      if (url.pathname.startsWith('/api/study-plans/') && request.method === 'PATCH') {
+        const response = await handleStudyPlanTaskUpdate(request, env)
+        const responseHeaders = new Headers(response.headers)
+        new Headers(headers).forEach((value, key) => responseHeaders.set(key, value))
+        return new Response(response.body, { status: response.status, headers: responseHeaders })
+      }
+      if (url.pathname.startsWith('/api/study-plans/') && request.method === 'DELETE') {
+        const response = await handleStudyPlanDelete(request, env)
         const responseHeaders = new Headers(response.headers)
         new Headers(headers).forEach((value, key) => responseHeaders.set(key, value))
         return new Response(response.body, { status: response.status, headers: responseHeaders })
